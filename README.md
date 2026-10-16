@@ -225,3 +225,5 @@ pm2 restart hyperrun-live-bridge --update-env
 ถ้า VPS ยังไม่มีระบบหมุน log ของ PM2 ให้ตั้ง `pm2-logrotate` ตามนโยบายพื้นที่ของคุณ เช่น max_size10M และ retain7 เพื่อไม่ให้ log โตตลอดเวลา
 
 Rainbow Cat: map giftId จริงไปยัง `{ "key": "rainbow_cat", "value": 1 }` เกมจะให้ขี่แมวเร็ว ×2.5 นาน 10 วินาที ค่าความเร็วและเวลาแก้ที่ `ReplicatedStorage.RaceEventConfig` ใน Roblox ไม่ใช่ `value` ใน gift map
+
+Naruto: map giftId จริงไปยัง `{ "key": "naruto", "value": 1 }` ค่าในเกมปัจจุบันแปลงร่าง5วินาที เร็ว×7.5 และของขวัญหลายชิ้นต่อเวลาสะสม แก้ที่ `ReplicatedStorage.RaceEventConfig` ต้องอัปเดต bridge รุ่นที่รองรับ `naruto` ก่อนใช้ผ่าน Direct Live

@@ -46,6 +46,7 @@ test('Tikkies fallback stays authenticated, scoped and off unless enabled',async
   const join=store.poll(session.id);store.ack(session.id,join.eventId,join.receipt);
   assert.equal((await post(route,config.adminKey,{...actor,eventId:'vendor-gift',eventType:'gift',effects:[{key:'rocket',value:1,count:1}]})).status,200);
   assert.equal((await post(route,config.adminKey,{...actor,eventId:'cat-gift',eventType:'gift',effects:[{key:'rainbow_cat',value:1,count:1}]})).status,200);
+  assert.equal((await post(route,config.adminKey,{...actor,eventId:'naruto-gift',eventType:'gift',effects:[{key:'naruto',value:1,count:1}]})).status,200);
   assert.equal((await post(route,config.adminKey,{...actor,eventId:'stale',generation:0})).status,409);
   assert.equal((await post('/v1/servers/job/ack',config.bridgeKey,{receipts:[null]})).status,400);
  }finally{await new Promise(r=>server.close(r));store.close();}

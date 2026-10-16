@@ -11,3 +11,6 @@ test('Euler token alias and configuration validation',()=>{
 test('rainbow_cat can be mapped to a TikTok gift',()=>{
  assert.doesNotThrow(()=>validateGiftMap({123:{key:'rainbow_cat',value:1}}));
 });
+test('naruto can be mapped to a TikTok gift',()=>{
+ assert.doesNotThrow(()=>validateGiftMap({777:{key:'naruto',value:1}}));
+});
