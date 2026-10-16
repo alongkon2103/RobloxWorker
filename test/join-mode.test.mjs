@@ -15,3 +15,18 @@ test('per-session at/plain/both join modes survive reset and do not leak',async(
   }
  }finally{store.close();}
 });
+
+test('existing database migrates join mode without losing sessions',async()=>{
+ const {DatabaseSync}=await import('node:sqlite');
+ const {mkdtempSync,rmSync}=await import('node:fs');
+ const {tmpdir}=await import('node:os');
+ const {join}=await import('node:path');
+ const dir=mkdtempSync(join(tmpdir(),'bridge-mode-migration-'));const file=join(dir,'test.sqlite');
+ try{
+  let store=new Store(file);const created=store.create({ownerRobloxId:'999',jobId:'job',tiktokUsername:'existing'});store.close();
+  const old=new DatabaseSync(file);old.exec('ALTER TABLE sessions DROP COLUMN join_mode');old.close();
+  store=new Store(file);assert.equal(store.authenticate(created.id,created.token).owner_id,'999');
+  assert.equal(store.public(store.get(created.id)).joinMode,'at');store.setJoinMode(created.id,'both');store.close();
+  store=new Store(file);assert.equal(store.public(store.get(created.id)).joinMode,'both');store.close();
+ }finally{rmSync(dir,{recursive:true,force:true});}
+});
