@@ -7,7 +7,8 @@ const eventID=x=>string(x,/^[A-Za-z0-9:._-]{1,200}$/,'event_id');
 function sessionBody(body){
  const tiktokUsername=string(typeof body.tiktokUsername==='string'?body.tiktokUsername.trim().replace(/^@/,'').toLowerCase():null,/^[a-z0-9._]{2,24}$/,'tiktok_username');
  const provider=body.provider??'direct';if(!['direct','tikkies'].includes(provider))throw new Fault('invalid_provider');
- return {ownerRobloxId:positiveID(body.ownerRobloxId,'owner_id'),jobId:job(body.jobId),tiktokUsername,provider,giftMap:body.giftMap===undefined?null:validateGiftMap(body.giftMap)};
+ const joinMode=body.joinMode??'at';if(!['at','plain','both'].includes(joinMode))throw new Fault('invalid_join_mode');
+ return {joinMode,ownerRobloxId:positiveID(body.ownerRobloxId,'owner_id'),jobId:job(body.jobId),tiktokUsername,provider,giftMap:body.giftMap===undefined?null:validateGiftMap(body.giftMap)};
 }
 async function readJSON(req){
  if(!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type']??''))throw new Fault('json_required',415);
@@ -63,7 +64,7 @@ export function createAPI(store,config,{log=()=>{}}={}){
     if(body.eventType==='join'&&!store.actor(s.id,s.generation,actor.actorKey)&&store.actorCount(s.id,s.generation)>=(config.maxActors??30))throw new Fault('viewer_limit',429);
     const accepted=store.enqueue(s.id,s.generation,eventID(body.eventId),{...actor,eventType:body.eventType,effects},{actor:body.eventType==='join'?actor:undefined});send(200,{accepted});return;
    }
-   const match=path.match(/^\/v1\/sessions\/([0-9a-f-]{36})(?:\/(heartbeat|poll|ack|reset|reconnect|gifts|gift-map))?$/);
+   const match=path.match(/^\/v1\/sessions\/([0-9a-f-]{36})(?:\/(heartbeat|poll|ack|reset|reconnect|gifts|gift-map|join-mode))?$/);
    if(!match)throw new Fault('not_found',404);
    const id=match[1],action=match[2];const s=store.authenticate(id,token);rate(`session:${id}`,300);
    if(!action&&method==='GET'){send(200,view(s));return;}
@@ -76,6 +77,7 @@ export function createAPI(store,config,{log=()=>{}}={}){
    if(action==='ack'){send(200,acknowledge(store,id,body));return;}
    if(action==='reset'){send(200,store.reset(id,string(body.requestId,/^[A-Za-z0-9._:-]{1,128}$/,'request_id')));return;}
    if(action==='reconnect'){store.heartbeat(id);if(s.status==='error')store.status(id,'queued');send(200,view(store.get(id)));return;}
+   if(action==='join-mode'){send(200,store.setJoinMode(id,body.joinMode));return;}
    if(action==='gift-map'){store.heartbeat(id);const gifts=validateGiftMap(body.gifts);store.setGiftMap(id,gifts);send(200,{gifts});return;}
    throw new Fault('not_found',404);
   }catch(error){const status=error instanceof Fault?error.status:500;if(status===500)log({event:'http_internal_error'});send(status,{error:error instanceof Fault?error.code:'internal_error'});}

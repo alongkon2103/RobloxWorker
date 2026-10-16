@@ -24,7 +24,8 @@ export class EventTranslator {
   const actorKey=`tiktok:${d.user.userId}`;
   let actor=this.store.actor(id,generation,actorKey);
   if(type==='WebcastChatMessage'){
-   const command=d.comment.match(/^(?:!join\s+|@\s*)([A-Za-z0-9_]{3,20})$/i);
+   const pattern=s.join_mode==='plain'?/^([A-Za-z0-9_]{3,20})$/:s.join_mode==='both'?/^(?:@\s*)?([A-Za-z0-9_]{3,20})$/:/^@\s*([A-Za-z0-9_]{3,20})$/;
+   const command=d.comment.trim().match(pattern);
    if(command){
     if(this.store.seen(id,generation,sourceId))return false;
     if(!actor&&this.store.actorCount(id,generation)>=this.maxActors)return false;

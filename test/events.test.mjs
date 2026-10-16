@@ -11,14 +11,14 @@ test('join then mapped final combo only once and round cancels pending lookup',a
  await translator.handle(session.id,1,compactMessage(gift('3',true,3)));const g=s.poll(session.id);assert.equal(g.effects[0].count,3);s.ack(session.id,g.eventId,g.receipt);
  await translator.handle(session.id,1,compactMessage(gift('4',true,3)));assert.equal(s.poll(session.id),null);
  let release;const delayed=new EventTranslator(s,{resolve:()=>new Promise(r=>release=r),giftMap:{},maxActors:30});
- const pending=delayed.handle(session.id,1,compactMessage(chat('5','!join Other_User')));s.reset(session.id);release({id:'555',name:'Other_User'});await pending;
+ const pending=delayed.handle(session.id,1,compactMessage(chat('5','@Other_User')));s.reset(session.id);release({id:'555',name:'Other_User'});await pending;
  assert.equal(s.poll(session.id),null);assert.equal(s.actor(session.id,2,'tiktok:90071992547409999'),null);s.close();
 });
 test('durable inbox persists retry at queue capacity',()=>{
  const s=new Store(':memory:',{maxQueue:1});const a=make(s);
- s.ingest(a.id,a.generation,[compactMessage(chat('1','!join Runner_1'))]);
+ s.ingest(a.id,a.generation,[compactMessage(chat('1','@Runner_1'))]);
  assert.equal(s.inbox(a.id).sourceId,'WebcastChatMessage:1');
- s.ingest(a.id,a.generation,[compactMessage(chat('1','!join Runner_1'))]);assert.equal(s.inboxDepth(a.id),1);
+ s.ingest(a.id,a.generation,[compactMessage(chat('1','@Runner_1'))]);assert.equal(s.inboxDepth(a.id),1);
  s.finishInbox(s.inbox(a.id).seq);assert.equal(s.inbox(a.id),null);s.close();
 });
 test('rejects unacknowledgeable IDs and preserves large string user IDs',()=>{

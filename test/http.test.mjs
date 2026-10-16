@@ -10,6 +10,9 @@ test('HTTP auth, owner sessions, scoped delivery, idempotent reset and job batch
   const a=(await req('/v1/sessions',config.bridgeKey,{ownerRobloxId:'1',jobId:'job',tiktokUsername:'alice'})).data;
   const b=(await req('/v1/sessions',config.bridgeKey,{ownerRobloxId:'2',jobId:'other',tiktokUsername:'bob'})).data;
   assert.ok(a.token);assert.equal((await req('/v1/admin/sessions',config.bridgeKey)).status,401);
+  assert.equal((await req(`/v1/sessions/${a.id}/join-mode`,b.token,{joinMode:'both'})).status,401);
+  assert.equal((await req(`/v1/sessions/${a.id}/join-mode`,a.token,{joinMode:'invalid'})).status,400);
+  assert.equal((await req(`/v1/sessions/${a.id}/join-mode`,a.token,{joinMode:'both'})).data.joinMode,'both');
   const orphan=(await req('/v1/sessions',config.bridgeKey,{ownerRobloxId:'4',jobId:'job',tiktokUsername:'orphan'})).data;
   const seenBefore=store.get(orphan.id).seen_at;
   store.now=()=>seenBefore+1000;

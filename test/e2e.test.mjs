@@ -9,7 +9,7 @@ test('two mock Euler lives deliver join/gift to exact owners and jobs through HT
  try{
   const a=await request('/v1/sessions',config.bridgeKey,{ownerRobloxId:'1',jobId:'job-A',tiktokUsername:'live_a'}),b=await request('/v1/sessions',config.bridgeKey,{ownerRobloxId:'2',jobId:'job-B',tiktokUsername:'live_b'});
   manager.start();await eventually(()=>Socket.list.length===2);
-  for(const [i,socket] of Socket.list.entries())socket.message({messages:[{type:'WebcastChatMessage',data:{common:{msgId:'chat-'+i},user:{userId:'same-viewer',displayId:'viewer'},comment:i===0?'!join RunnerA':'@RunnerB'}}]});
+  for(const [i,socket] of Socket.list.entries())socket.message({messages:[{type:'WebcastChatMessage',data:{common:{msgId:'chat-'+i},user:{userId:'same-viewer',displayId:'viewer'},comment:i===0?'@RunnerA':'@RunnerB'}}]});
   await eventually(()=>store.actor(a.id,1,'tiktok:same-viewer')&&store.actor(b.id,1,'tiktok:same-viewer'));
   const [ea,eb]=await Promise.all([request('/v1/servers/job-A/poll',config.bridgeKey,{}),request('/v1/servers/job-B/poll',config.bridgeKey,{})]);
   assert.equal(ea.events[0].event.ownerRobloxId,'1');assert.equal(ea.events[0].event.robloxId,'111');assert.equal(eb.events[0].event.ownerRobloxId,'2');assert.equal(eb.events[0].event.robloxId,'222');

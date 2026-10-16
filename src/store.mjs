@@ -23,21 +23,23 @@ export class Store {
    CREATE INDEX IF NOT EXISTS inbox_pending ON inbox(session_id,generation,seq);
    CREATE TABLE IF NOT EXISTS sources(session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,generation INTEGER NOT NULL,source_id TEXT NOT NULL,seen_at INTEGER NOT NULL,PRIMARY KEY(session_id,generation,source_id));
   `);
+  if(!this.db.prepare('PRAGMA table_info(sessions)').all().some(c=>c.name==='join_mode'))this.db.exec("ALTER TABLE sessions ADD COLUMN join_mode TEXT NOT NULL DEFAULT 'at'");
  }
  tx(fn){this.db.exec('BEGIN IMMEDIATE');try{const result=fn();this.db.exec('COMMIT');return result;}catch(e){this.db.exec('ROLLBACK');throw e;}}
  get(id){const s=this.db.prepare('SELECT * FROM sessions WHERE id=?').get(id);if(!s)throw new Fault('session_not_found',404);return s;}
- public(s){return {id:s.id,ownerRobloxId:s.owner_id,jobId:s.job_id,tiktokUsername:s.tiktok,provider:s.provider,status:s.status,runId:s.run_id,generation:s.generation,lastCode:s.last_code,queueDepth:this.db.prepare("SELECT COUNT(*) AS n FROM events WHERE session_id=? AND generation=? AND status='pending' AND expires_at>?").get(s.id,s.generation,this.now()).n};}
- create({ownerRobloxId,jobId,tiktokUsername,provider='direct',giftMap=null}){
+ public(s){return {id:s.id,ownerRobloxId:s.owner_id,jobId:s.job_id,tiktokUsername:s.tiktok,provider:s.provider,joinMode:s.join_mode,status:s.status,runId:s.run_id,generation:s.generation,lastCode:s.last_code,queueDepth:this.db.prepare("SELECT COUNT(*) AS n FROM events WHERE session_id=? AND generation=? AND status='pending' AND expires_at>?").get(s.id,s.generation,this.now()).n};}
+ create({ownerRobloxId,jobId,tiktokUsername,provider='direct',giftMap=null,joinMode='at'}){
   return this.tx(()=>{
    this.expire();
    if(this.db.prepare("SELECT COUNT(*) AS n FROM sessions WHERE status NOT IN ('closed','expired')").get().n>=this.maxSessions)throw new Fault('session_capacity',429);
    if(this.db.prepare("SELECT id FROM sessions WHERE owner_id=? AND status NOT IN ('closed','expired')").get(ownerRobloxId))throw new Fault('owner_busy',409);
    if(this.db.prepare("SELECT id FROM sessions WHERE tiktok=? AND status NOT IN ('closed','expired')").get(tiktokUsername))throw new Fault('live_busy',409);
    const id=randomUUID(),token=randomBytes(32).toString('base64url'),runId=randomUUID(),now=this.now();
-   this.db.prepare('INSERT INTO sessions(id,token_hash,owner_id,job_id,tiktok,provider,status,run_id,generation,seen_at,created_at,gift_map) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)').run(id,digest(token),ownerRobloxId,jobId,tiktokUsername,provider,provider==='direct'?'queued':'live',runId,1,now,now,giftMap===null?null:JSON.stringify(giftMap));
+   this.db.prepare('INSERT INTO sessions(id,token_hash,owner_id,job_id,tiktok,provider,status,run_id,generation,seen_at,created_at,gift_map,join_mode) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)').run(id,digest(token),ownerRobloxId,jobId,tiktokUsername,provider,provider==='direct'?'queued':'live',runId,1,now,now,giftMap===null?null:JSON.stringify(giftMap),joinMode);
    return {...this.public(this.get(id)),token};
   });
  }
+ setJoinMode(id,mode){if(!['at','plain','both'].includes(mode))throw new Fault('invalid_join_mode');this.heartbeat(id);this.db.prepare('UPDATE sessions SET join_mode=? WHERE id=?').run(mode,id);return this.public(this.get(id));}
  authenticate(id,token){const s=this.get(id);if(typeof token!=='string'||!constantEqual(s.token_hash,digest(token)))throw new Fault('unauthorized',401);return s;}
  heartbeat(id){if(terminal.includes(this.get(id).status))throw new Fault('session_inactive',410);this.db.prepare('UPDATE sessions SET seen_at=? WHERE id=?').run(this.now(),id);return this.public(this.get(id));}
  reset(id,requestId=randomUUID()){return this.tx(()=>{const s=this.get(id);if(terminal.includes(s.status))throw new Fault('session_inactive',410);const saved=this.db.prepare('SELECT response FROM controls WHERE session_id=? AND request_id=?').get(id,requestId);if(saved)return JSON.parse(saved.response);this.db.prepare('UPDATE sessions SET generation=generation+1,run_id=?,seen_at=? WHERE id=?').run(randomUUID(),this.now(),id);for(const table of ['events','actors','sources','inbox'])this.db.prepare(`DELETE FROM ${table} WHERE session_id=?`).run(id);const response=this.public(this.get(id));this.db.prepare('INSERT INTO controls VALUES(?,?,?,?)').run(id,requestId,JSON.stringify(response),this.now());this.db.prepare('DELETE FROM controls WHERE session_id=? AND request_id NOT IN (SELECT request_id FROM controls WHERE session_id=? ORDER BY created_at DESC LIMIT 128)').run(id,id);return response;});}

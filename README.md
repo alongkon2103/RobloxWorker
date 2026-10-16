@@ -78,7 +78,10 @@ SQLite WAL + synchronous FULL เก็บ session, raw inbox, actor bindings, d
 
 ## คนดูเข้าร่วมและ Rocket
 
-คนดูพิมพ์ `!join RobloxUsername` หรือ `@RobloxUsername` / `@ RobloxUsername` API จะ resolve บัญชี Roblox และผูกกับ TikTok user ID ของผู้พิมพ์ ไม่ใช้ชื่อแสดงผลเป็นตัวระบุคน
+เลือก `joinMode` ต่อ session ได้ 3 ค่า: `at` ต้องมี@ (ค่าเริ่มต้น), `plain` พิมพ์ชื่อ Roblox ตรงๆ, `both` รับทั้งสองแบบ บันทึกใน SQLite และคงค่าเมื่อ reset รอบ เปลี่ยนทันทีด้วย POST `/v1/sessions/:id/join-mode` body `{ "joinMode": "both" }` ใช้ session token
+
+
+คนดูพิมพ์ `@RobloxUsername` / `@ RobloxUsername` ตามค่าเริ่มต้น API จะ resolve บัญชี Roblox และผูกกับ TikTok user ID ของผู้พิมพ์ ไม่ใช้ชื่อแสดงผลเป็นตัวระบุคน
 
 ค่าเริ่มต้น `gift-map.json` เป็น `{}` เพื่อไม่เดาว่าของขวัญไหนควรเป็น Rocket หลังไลฟ์ได้รับ gift ให้ดู `GET /v1/sessions/:id/gifts` เพื่อหา giftId/ชื่อ แล้วตั้ง map:
 
@@ -108,6 +111,7 @@ SQLite WAL + synchronous FULL เก็บ session, raw inbox, actor bindings, d
 | `POST /v1/sessions/:id/reconnect` | Session token | ลองใหม่หลัง connection error |
 | `DELETE /v1/sessions/:id` | Session token | ปิด session/ล้างงาน |
 | `GET /v1/sessions/:id/gifts` | Session token | gift catalogue ของไลฟ์นี้ |
+| `POST /v1/sessions/:id/join-mode` | Session token | ตั้งรูปแบบเข้าร่วม at/plain/both |
 | `POST /v1/sessions/:id/gift-map` | Session token | ตั้ง `{gifts:{giftId:{key,value}}}` เฉพาะ session |
 | `POST /v1/servers/:jobId/poll` | Bridge key | batch poll ทุก session ใน Roblox server นี้ |
 | `POST /v1/servers/:jobId/ack` | Bridge key | batch ACK ของ server นี้ |
@@ -121,7 +125,8 @@ SQLite WAL + synchronous FULL เก็บ session, raw inbox, actor bindings, d
   "ownerRobloxId": "123456",
   "jobId": "Roblox-game-JobId",
   "tiktokUsername": "ชื่อสตรีมเมอร์ไม่ใส่@ก็ได้",
-  "provider": "direct"
+  "provider": "direct",
+  "joinMode": "at"
 }
 ```
 
