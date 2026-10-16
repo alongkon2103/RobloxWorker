@@ -36,7 +36,13 @@ export function createAPI(store,config,{log=()=>{}}={}){
    if(serverMatch&&method==='POST'){
     privileged(config.bridgeKey);rate(`server:${serverMatch[1]}`,240);const body=await readJSON(req),jobId=serverMatch[1];
     if(serverMatch[2]==='poll'){
-     const events=[];for(const s of store.list()){if(s.job_id!==jobId)continue;const event=store.poll(s.id);if(event)events.push({sessionId:s.id,event});}
+     let requested=null;
+     if(body.sessionIds!==undefined){
+      if(!Array.isArray(body.sessionIds)||body.sessionIds.length>100||body.sessionIds.some(id=>typeof id!=='string'||! /^[0-9a-f-]{36}$/.test(id)))throw new Fault('invalid_sessions');
+      requested=new Set(body.sessionIds);
+      for(const id of requested){if(store.get(id).job_id!==jobId)throw new Fault('job_mismatch',403);}
+     }
+     const events=[];for(const s of store.list()){if(s.job_id!==jobId||(requested&&!requested.has(s.id)))continue;const event=store.poll(s.id);if(event)events.push({sessionId:s.id,event});}
      send(200,{events});return;
     }
     if(!Array.isArray(body.receipts)||body.receipts.length>100)throw new Fault('invalid_receipts');

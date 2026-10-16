@@ -169,12 +169,14 @@ reset:
 
 ```json
 // POST /v1/servers/:jobId/poll
-{}
+{ "sessionIds": ["session-uuid"] }
 // response
 { "events": [{ "sessionId": "uuid", "event": {} }] }
 // POST /v1/servers/:jobId/ack
 { "receipts": [{ "sessionId": "uuid", "eventId": "id", "receipt": "opaque", "success": true }] }
 ```
+
+`sessionIds` เป็นรายการ session ที่ Roblox ถือ token อยู่จริง (สูงสุด100) API จะ poll/ต่อ heartbeat เฉพาะรายการนี้ และปฏิเสธ session ของ job อื่น วิธีนี้ทำให้ orphan จากคำตอบ create ที่สูญหายหมดอายุตามปกติ; client เดิมส่ง `{}` ยังใช้งานแบบ poll ทั้ง job ได้
 
 รหัสทั่วไป:401คีย์ไม่ตรง,403provider/jobไม่อนุญาต,409owner/liveใช้งานอยู่หรือreceipt/รอบเก่า,410sessionหมดอายุ,429quota/queueเต็ม
 
