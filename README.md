@@ -93,7 +93,7 @@ SQLite WAL + synchronous FULL เก็บ session, raw inbox, actor bindings, d
 
 แทนข้อความด้วย giftId ตัวเลขจริงก่อนใช้งาน ตั้งแบบส่วนกลางใน `gift-map.json` แล้ว restart หรือใช้ API `gift-map` ตั้งเฉพาะ session โดยไม่ต้อง restart
 
-รองรับ keys `rocket`, `jump`, `heal`, `power` แบบเดียวกับ handler เกม นับ combo gift ตอนจบและกัน group ซ้ำเมื่อ upstream มี groupId; gift ที่ไม่อยู่ใน map จะบันทึกใน catalogue แต่ไม่สร้าง effect และผู้ส่งต้อง join ก่อน
+รองรับ keys `rocket`, `rainbow_cat`, `jump`, `heal`, `power` แบบเดียวกับ handler เกม นับ combo gift ตอนจบและกัน group ซ้ำเมื่อ upstream มี groupId; gift ที่ไม่อยู่ใน map จะบันทึกใน catalogue แต่ไม่สร้าง effect และผู้ส่งต้อง join ก่อน
 
 ## API
 
@@ -223,3 +223,5 @@ pm2 restart hyperrun-live-bridge --update-env
 อ้างอิง protocol: [Euler WebSocket API](https://www.eulerstream.com/docs/api/tiktok-web-socket-api), [Euler WebSocket SDK](https://github.com/EulerStream/Euler-WebSocket-SDK)
 
 ถ้า VPS ยังไม่มีระบบหมุน log ของ PM2 ให้ตั้ง `pm2-logrotate` ตามนโยบายพื้นที่ของคุณ เช่น max_size10M และ retain7 เพื่อไม่ให้ log โตตลอดเวลา
+
+Rainbow Cat: map giftId จริงไปยัง `{ "key": "rainbow_cat", "value": 1 }` เกมจะให้ขี่แมวเร็ว ×2.5 นาน 10 วินาที ค่าความเร็วและเวลาแก้ที่ `ReplicatedStorage.RaceEventConfig` ใน Roblox ไม่ใช่ `value` ใน gift map
