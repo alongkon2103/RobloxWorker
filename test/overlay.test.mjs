@@ -37,7 +37,7 @@ test('overlay HTTP: bridge-only claim, read-only URL, static CSP and real snapsh
   await new Promise(r=>setTimeout(r,410));
   assert.equal((await call('/v1/overlays/batch',config.bridgeKey,{items:[{writeToken:claim.writeToken,sequence:2,snapshot:snapshot({route:undefined})}],route})).status,200);
   const state=await (await call('/v1/overlay/state',claim.readToken)).json();assert.equal(state.snapshot.racers[0].name,'Alice');assert.equal(state.snapshot.racers[0].avatarUrl,'https://tr.rbxcdn.com/avatar.png');assert.equal(state.writeToken,undefined);
-  const html=await fetch(origin+'/overlay?view=map');assert.equal(html.status,200);assert.match(html.headers.get('content-security-policy'),/default-src 'self'/);assert.match(await html.text(),/app.js/);
+  const html=await fetch(origin+'/overlay?view=map');assert.equal(html.status,200);assert.match(html.headers.get('content-security-policy'),/default-src 'self'/);const document=await html.text();assert.match(document,/app\.[a-f0-9]{12}\.js/);const scriptPath=document.match(/src="([^"]+app\.[^"]+)"/)[1];const script=await fetch(origin+scriptPath);assert.equal(script.status,200);assert.match(script.headers.get('cache-control'),/immutable/);assert.match(await script.text(),/marker-layout\.[a-f0-9]{12}\.js/);
   assert.equal((await fetch(origin+'/overlay/../../.env')).status,404);
  }finally{server.closeAllConnections();await new Promise(r=>server.close(r));store.close();}
 });

@@ -1,3 +1,4 @@
+import {createHash} from 'node:crypto';
 import {AvatarCache} from './overlay-avatars.mjs';
 import {readFileSync} from 'node:fs';
 import {Overlays} from './overlay.mjs';
@@ -24,6 +25,17 @@ export function createAPI(store,config,{log=()=>{},thumbnailFetch=fetch}={}){
  const publishOverlay=(key,b)=>{const result=overlays.publish(key,b);avatars.enqueue(b.snapshot.racers.map(r=>r.robloxId));return result;};
  const assets=new Map();
  for(const [url,file,type] of [["/overlay","index.html","text/html; charset=utf-8"],["/overlay/app.js","app.js","text/javascript; charset=utf-8"],["/overlay/overlay.css","overlay.css","text/css; charset=utf-8"],["/overlay/art.png","art.png","image/png"],["/overlay/marker-layout.js","marker-layout.js","text/javascript; charset=utf-8"]]){try{assets.set(url,{data:readFileSync(new URL("../public/overlay/"+file,import.meta.url)),type});}catch{}}
+ // Content-addressed asset names also work when a proxy forces a long browser cache.
+ const fingerprint=(path,extension)=>{
+  const asset=assets.get(path);if(!asset)return path;
+  const hash=createHash('sha256').update(asset.data).digest('hex').slice(0,12);
+  const name=path.slice(0,-extension.length)+hash+'.'+extension;
+  assets.set(name,{...asset,immutable:true});return name;
+ };
+ const helper=fingerprint('/overlay/marker-layout.js','js');
+ const app=assets.get('/overlay/app.js');if(app)app.data=Buffer.from(app.data.toString().replace('/overlay/marker-layout.js',helper));
+ const appURL=fingerprint('/overlay/app.js','js'),cssURL=fingerprint('/overlay/overlay.css','css'),artURL=fingerprint('/overlay/art.png','png');
+ const html=assets.get('/overlay');if(html)html.data=Buffer.from(html.data.toString().replace('/overlay/app.js',appURL).replace('/overlay/overlay.css',cssURL).replace('/overlay/art.png',artURL));
  const rates=new Map();
  function rate(key,max){const now=store.now();const r=rates.get(key);if(!r||r.until<=now){rates.set(key,{n:1,until:now+60000});return;}if(++r.n>max)throw new Fault('rate_limited',429);}
  const housekeeping=setInterval(()=>{for(const [key,r] of rates)if(r.until<store.now())rates.delete(key);overlays.sweep();},60000);housekeeping.unref();
@@ -35,7 +47,7 @@ export function createAPI(store,config,{log=()=>{},thumbnailFetch=fetch}={}){
    const token=req.headers.authorization?.match(/^Bearer ([^\s]+)$/)?.[1];
    const privileged=key=>{if(!constantEqual(token,key))throw new Fault('unauthorized',401);};
    const asset=assets.get(path);
-   if(asset&&method==='GET'){res.writeHead(200,{'content-type':asset.type,'cache-control':'no-cache','x-content-type-options':'nosniff','referrer-policy':'no-referrer','content-security-policy':"default-src 'self'; img-src 'self' data: https://*.rbxcdn.com; style-src 'self'; script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"});res.end(asset.data);return;}
+   if(asset&&method==='GET'){res.writeHead(200,{'content-type':asset.type,'cache-control':asset.immutable?'public, max-age=31536000, immutable':'no-store','x-content-type-options':'nosniff','referrer-policy':'no-referrer','content-security-policy':"default-src 'self'; img-src 'self' data: https://*.rbxcdn.com; style-src 'self'; script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"});res.end(asset.data);return;}
    if(path==='/v1/overlays/claim'&&method==='POST'){privileged(config.bridgeKey);rate('overlay-claim',600);send(200,overlays.claim(await readJSON(req)));return;}
    if(path==='/v1/overlays/publish'&&method==='POST'){send(200,publishOverlay(token,await readJSON(req)));return;}
    if(path==='/v1/overlays/release'&&method==='POST'){send(200,overlays.release(token));return;}
