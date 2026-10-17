@@ -23,7 +23,7 @@ export function createAPI(store,config,{log=()=>{},thumbnailFetch=fetch}={}){
  const avatars=new AvatarCache({fetcher:thumbnailFetch,now:()=>store.now()});
  const publishOverlay=(key,b)=>{const result=overlays.publish(key,b);avatars.enqueue(b.snapshot.racers.map(r=>r.robloxId));return result;};
  const assets=new Map();
- for(const [url,file,type] of [["/overlay","index.html","text/html; charset=utf-8"],["/overlay/app.js","app.js","text/javascript; charset=utf-8"],["/overlay/overlay.css","overlay.css","text/css; charset=utf-8"],["/overlay/art.png","art.png","image/png"]]){try{assets.set(url,{data:readFileSync(new URL("../public/overlay/"+file,import.meta.url)),type});}catch{}}
+ for(const [url,file,type] of [["/overlay","index.html","text/html; charset=utf-8"],["/overlay/app.js","app.js","text/javascript; charset=utf-8"],["/overlay/overlay.css","overlay.css","text/css; charset=utf-8"],["/overlay/art.png","art.png","image/png"],["/overlay/marker-layout.js","marker-layout.js","text/javascript; charset=utf-8"]]){try{assets.set(url,{data:readFileSync(new URL("../public/overlay/"+file,import.meta.url)),type});}catch{}}
  const rates=new Map();
  function rate(key,max){const now=store.now();const r=rates.get(key);if(!r||r.until<=now){rates.set(key,{n:1,until:now+60000});return;}if(++r.n>max)throw new Fault('rate_limited',429);}
  const housekeeping=setInterval(()=>{for(const [key,r] of rates)if(r.until<store.now())rates.delete(key);overlays.sweep();},60000);housekeeping.unref();

@@ -1,3 +1,4 @@
+import {separateMarkers} from '/overlay/marker-layout.js';
 const params=new URLSearchParams(location.search),root=document.querySelector('#overlay'),canvas=document.querySelector('#map'),ctx=canvas.getContext('2d');
 const view=['map','ranking','speed','all'].includes(params.get('view'))?params.get('view'):'map';root.className=view;
 let key=location.hash.slice(1),frames=[],latest=null,lastSequence=-1,lastRound='',lastUI=0,failures=0,route=null,project=null;
@@ -31,7 +32,9 @@ function rendered(){
 function point(distance){
  const n=route.points.length,d=((Math.max(0,distance)%route.length)/route.length)*n,i=Math.floor(d)%n,f=d-Math.floor(d),a=route.points[i],b=route.points[(i+1)%n];return project([a[0]+(b[0]-a[0])*f,a[1]+(b[1]-a[1])*f]);
 }
-function draw(s){
+const markerOffsets=new Map();let lastDraw=0;let layoutKey="",layoutOffsets=new Map();
+function draw(s,now){
+ const blend=1-Math.exp(-Math.min(.1,(now-lastDraw)/1000)*14);lastDraw=now;
  ctx.clearRect(0,0,900,880);if(!route||!project)return;
  ctx.beginPath();route.points.forEach((p,i)=>{const [x,y]=project(p);i?ctx.lineTo(x,y):ctx.moveTo(x,y);});ctx.closePath();ctx.lineJoin='round';ctx.lineCap='round';
  ctx.shadowColor='#081525a0';ctx.shadowBlur=7;ctx.strokeStyle='#18223bd9';ctx.lineWidth=26;ctx.stroke();ctx.shadowBlur=0;ctx.strokeStyle='#fff9e7';ctx.lineWidth=21;ctx.stroke();
@@ -44,8 +47,23 @@ function draw(s){
  ctx.beginPath();route.points.forEach((p,i)=>{const [x,y]=project(p);i?ctx.lineTo(x,y):ctx.moveTo(x,y);});ctx.closePath();ctx.strokeStyle='#ffffff80';ctx.lineWidth=2;ctx.stroke();
  const start=point(0);ctx.fillStyle='#fff';ctx.fillRect(start[0]-12,start[1]-14,24,28);ctx.fillStyle='#101c31';for(let i=0;i<3;i++)for(let j=0;j<4;j++)if((i+j)%2===0)ctx.fillRect(start[0]-12+i*8,start[1]-14+j*7,8,7);
  if(!s)return;
- for(const r of [...s.racers].sort((a,b)=>b.rank-a.rank)){
-  const [x,y]=point(r.distance),size=r.rank===1?26:22;ctx.shadowColor='#0008';ctx.shadowBlur=6;ctx.beginPath();ctx.arc(x,y,size+3,0,Math.PI*2);ctx.fillStyle='#122239';ctx.fill();ctx.beginPath();ctx.arc(x,y,size,0,Math.PI*2);ctx.fillStyle=color(r);ctx.fill();ctx.shadowBlur=0;const avatar=avatarImages.get(r.robloxId)?.img;
+ const anchors=s.racers.map(r=>{const [x,y]=point(r.distance);return {id:r.id,racer:r,x,y,radius:r.rank===1?26:22};});
+ const sorted=[...anchors].sort((a,b)=>a.id.localeCompare(b.id)),origin=sorted[0];
+ const key=sorted.map(a=>a.id+":"+a.radius+":"+Math.round((a.x-origin.x)/2)+":"+Math.round((a.y-origin.y)/2)).join("|");
+ let markers=anchors.map(a=>{const o=layoutOffsets.get(a.id)??{x:0,y:0};return {...a,x:a.x+o.x,y:a.y+o.y,anchorX:a.x,anchorY:a.y};});
+ if(key!==layoutKey||markers.some(m=>m.x<m.radius+4||m.y<m.radius+4||m.x>896-m.radius||m.y>876-m.radius)){
+  markers=separateMarkers(anchors);layoutKey=key;layoutOffsets=new Map(markers.map(m=>[m.id,{x:m.x-m.anchorX,y:m.y-m.anchorY}]));
+ }
+ const keep=new Set(markers.map(m=>m.id));
+ for(const id of markerOffsets.keys())if(!keep.has(id))markerOffsets.delete(id);
+ for(const m of markers){
+  const target={x:m.x-m.anchorX,y:m.y-m.anchorY},offset=markerOffsets.get(m.id)??target;
+  offset.x+=(target.x-offset.x)*blend;offset.y+=(target.y-offset.y)*blend;markerOffsets.set(m.id,offset);
+  m.x=m.anchorX+offset.x;m.y=m.anchorY+offset.y;
+ }
+ for(const m of markers){if(Math.hypot(m.x-m.anchorX,m.y-m.anchorY)>5){ctx.beginPath();ctx.moveTo(m.anchorX,m.anchorY);ctx.lineTo(m.x,m.y);ctx.strokeStyle=color(m.racer);ctx.lineWidth=2;ctx.stroke();ctx.beginPath();ctx.arc(m.anchorX,m.anchorY,3,0,Math.PI*2);ctx.fillStyle='#fff';ctx.fill();}}
+ for(const m of markers){
+  const r=m.racer,x=m.x,y=m.y,size=m.radius;ctx.shadowColor='#0008';ctx.shadowBlur=6;ctx.beginPath();ctx.arc(x,y,size+3,0,Math.PI*2);ctx.fillStyle='#122239';ctx.fill();ctx.beginPath();ctx.arc(x,y,size,0,Math.PI*2);ctx.fillStyle=color(r);ctx.fill();ctx.shadowBlur=0;const avatar=avatarImages.get(r.robloxId)?.img;
   ctx.save();ctx.beginPath();ctx.arc(x,y,size-1,0,Math.PI*2);ctx.clip();
   if(avatar?.complete&&avatar.naturalWidth>0)ctx.drawImage(avatar,x-size,y-size,size*2,size*2);
   else{ctx.fillStyle='#263c54';ctx.beginPath();ctx.arc(x,y-4,size*.3,0,Math.PI*2);ctx.fill();ctx.beginPath();ctx.ellipse(x,y+size*.65,size*.65,size*.5,0,0,Math.PI*2);ctx.fill();}
@@ -58,7 +76,7 @@ function board(id,list,s,top){
  list.slice(0,5).forEach((r,i)=>{keep.add(r.id);let row=rows.get(r.id);if(!row){row=document.createElement('div');row.className='row';row.innerHTML='<span class="place"></span><span class="avatar"></span><div class="identity"><div class="name"></div><div class="badge"></div></div><div class="metric"></div>';container.append(row);rows.set(r.id,row);}row.style.transform=`translateY(${i*46+4}px)`;row.dataset.place=String(i+1);row.querySelector('.place').textContent=i+1;row.querySelector('.name').textContent=r.name;const av=row.querySelector('.avatar');av.style.background=color(r);const avatar=avatarImages.get(r.robloxId);if(avatar&&av.dataset.url!==avatar.url){av.replaceChildren();const img=document.createElement('img');img.alt='';img.src=avatar.url;img.decoding='async';av.append(img);av.dataset.url=avatar.url;av.classList.add('has-avatar');}row.querySelector('.badge').textContent=top?'PEAK SPEED':r.state==='Finished'?'FINISHED':`LAP ${Math.min(s.laps,Math.floor(Math.max(0,r.distance)/s.route.length)+1)} / ${s.laps}`;const kmh=(top?r.topSpeed:r.speed)*s.metersPerStud*3.6;row.querySelector('.metric').textContent=number(kmh);const unit=document.createElement('small');unit.textContent='km/h';row.querySelector('.metric').append(unit);});
  for(const [key,row]of rows)if(!keep.has(key)){row.remove();rows.delete(key);}
 }
-function animate(now){const s=rendered();if(view==='map'||view==='all')draw(s);if(s&&now-lastUI>100){lastUI=now;if(view==='map'||view==='all')board('map-ranks',[...s.racers].sort((a,b)=>(a.rank||999)-(b.rank||999)),s,false);if(view==='ranking'||view==='all')board('ranks',[...s.racers].sort((a,b)=>(a.rank||999)-(b.rank||999)),s,false);if(view==='speed'||view==='all')board('speeds',[...s.racers].sort((a,b)=>b.topSpeed-a.topSpeed||a.id.localeCompare(b.id)),s,true);}requestAnimationFrame(animate);}requestAnimationFrame(animate);
+function animate(now){const s=rendered();if(view==='map'||view==='all')draw(s,now);if(s&&now-lastUI>100){lastUI=now;if(view==='map'||view==='all')board('map-ranks',[...s.racers].sort((a,b)=>(a.rank||999)-(b.rank||999)),s,false);if(view==='ranking'||view==='all')board('ranks',[...s.racers].sort((a,b)=>(a.rank||999)-(b.rank||999)),s,false);if(view==='speed'||view==='all')board('speeds',[...s.racers].sort((a,b)=>b.topSpeed-a.topSpeed||a.id.localeCompare(b.id)),s,true);}requestAnimationFrame(animate);}requestAnimationFrame(animate);
 async function poll(){
  if(!key){document.querySelector('#connection').textContent='เปิด URL ส่วนตัวจากปุ่ม OVERLAY ในเกม';return;}
  try{const r=await fetch('/v1/overlay/state',{headers:{authorization:'Bearer '+key},cache:'no-store',signal:AbortSignal.timeout(5000)});if(r.status===401){document.querySelector('#connection').textContent='ลิงก์ไม่ถูกต้อง · รับ URL จากในเกมอีกครั้ง';return;}if(!r.ok)throw new Error();setState(await r.json());failures=0;}
