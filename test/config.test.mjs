@@ -18,3 +18,12 @@ test('naruto can be mapped to a TikTok gift',()=>{
 test('stacking speed boost can be mapped to a TikTok gift',()=>{assert.deepEqual(validateGiftMap({321:{key:'speed_boost',value:1}}),{321:{key:'speed_boost',value:1}});});
 
 test('fly can be mapped to a TikTok gift',()=>{assert.deepEqual(validateGiftMap({322:{key:'fly',value:1}}),{322:{key:'fly',value:1}});});
+
+test('scoped overlay config validates origin, allowlist and distinct map/service credentials',()=>{
+ const env={...base,TIKKIES_OVERLAY_SERVICE_KEY:'s'.repeat(32),TIKKIES_OVERLAY_UNIVERSES:'100,200'};
+ const c=loadConfig(env);assert.deepEqual(c.overlayUniverses,['100','200']);assert.equal(c.overlayOrigin,'https://rbworker.aclassstore.com');
+ assert.throws(()=>loadConfig({...env,TIKKIES_OVERLAY_SERVICE_KEY:base.BRIDGE_API_KEY}),/different/);
+ assert.throws(()=>loadConfig({...env,TIKKIES_OVERLAY_UNIVERSES:''}),/UNIVERSES/);
+ for(const value of ['http://example.com','https://example.com/overlay','https://user:pass@example.com','https://example.com/#x'])assert.throws(()=>loadConfig({...env,OVERLAY_PUBLIC_ORIGIN:value}),/ORIGIN/);
+ assert.throws(()=>loadConfig({...env,TIKKIES_OVERLAY_UNIVERSES:'100,100'}),/UNIVERSES/);
+});

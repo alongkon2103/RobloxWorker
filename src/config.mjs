@@ -6,6 +6,23 @@ export function validateGiftMap(value){
   result[id]={key:effect.key,value:effect.value};
  }return result;
 }
+export function overlayConfig(env,bridgeKey,adminKey){
+ const overlayServiceKey=env.TIKKIES_OVERLAY_SERVICE_KEY?.trim()||null;
+ const validID=x=>typeof x==='string'&&/^[1-9]\d{0,15}$/.test(x)&&BigInt(x)<=9007199254740991n;
+ const validKey=x=>typeof x==='string'&&x.length>=32&&x.length<=256&&!/\s/.test(x);
+ let overlayOrigin;
+ try{const u=new URL(env.OVERLAY_PUBLIC_ORIGIN||'https://rbworker.aclassstore.com');if(u.protocol!=='https:'||u.username||u.password||u.pathname!=='/'||u.search||u.hash)throw new Error();overlayOrigin=u.origin;}catch{throw new Error('Invalid OVERLAY_PUBLIC_ORIGIN; use an HTTPS origin');}
+ const overlayUniverses=(env.TIKKIES_OVERLAY_UNIVERSES||'').split(',').map(x=>x.trim()).filter(Boolean);
+ if(overlayUniverses.length>100||overlayUniverses.some(x=>!validID(x))||new Set(overlayUniverses).size!==overlayUniverses.length)throw new Error('Invalid TIKKIES_OVERLAY_UNIVERSES');
+ let overlayMapKeys={};
+ if(env.OVERLAY_MAP_KEYS_FILE)overlayMapKeys=JSON.parse(readFileSync(resolve(env.OVERLAY_MAP_KEYS_FILE),'utf8'));
+ if(!overlayMapKeys||typeof overlayMapKeys!=='object'||Array.isArray(overlayMapKeys)||Object.keys(overlayMapKeys).length>100)throw new Error('Invalid OVERLAY_MAP_KEYS_FILE');
+ const keys=[bridgeKey,adminKey];
+ if(overlayServiceKey){if(!validKey(overlayServiceKey)||!overlayUniverses.length)throw new Error('Set a unique TIKKIES_OVERLAY_SERVICE_KEY and TIKKIES_OVERLAY_UNIVERSES');keys.push(overlayServiceKey);}
+ for(const [universe,key]of Object.entries(overlayMapKeys)){if(!validID(universe)||!validKey(key))throw new Error('Invalid overlay map credential');keys.push(key);}
+ if(new Set(keys).size!==keys.length)throw new Error('Overlay service/map credentials must be different from each other and bridge/admin keys');
+ return {overlayServiceKey,overlayOrigin,overlayUniverses,overlayMapKeys};
+}
 export function loadConfig(env=process.env){
  const number=(key,fallback,min,max)=>{const n=Number(env[key]??fallback);if(!Number.isInteger(n)||n<min||n>max)throw new Error(`Invalid ${key}`);return n;};
  const key=name=>{const value=env[name];if(!value||value.length<32)throw new Error(`Set ${name} to a random secret of at least32 characters`);return value;};
@@ -13,7 +30,7 @@ export function loadConfig(env=process.env){
  const eulerKey=env.EULER_API_KEY?.trim()||env.EULER_TOKEN?.trim();
  if(!eulerKey)throw new Error('Set EULER_TOKEN (or EULER_API_KEY)');
  let giftMap={};if(env.GIFT_MAP_FILE)giftMap=validateGiftMap(JSON.parse(readFileSync(resolve(env.GIFT_MAP_FILE),'utf8')));
- return {port:number('PORT',7435,1,65535),host:env.HOST||'127.0.0.1',dbPath:resolve(env.DB_PATH||'data/bridge.sqlite'),bridgeKey,adminKey,eulerKey,
+ return {...overlayConfig(env,bridgeKey,adminKey),port:number('PORT',7435,1,65535),host:env.HOST||'127.0.0.1',dbPath:resolve(env.DB_PATH||'data/bridge.sqlite'),bridgeKey,adminKey,eulerKey,
   giftMap,tikkiesEnabled:env.TIKKIES_ENABLED==='true',maxConnections:number('MAX_LIVE_CONNECTIONS',5,1,100),maxConnectAttempts:number('MAX_CONNECT_ATTEMPTS_PER_MINUTE',5,1,1000),maxProcessing:number('MAX_PROCESSING',10,1,100),
   maxSessions:number('MAX_SESSIONS',200,1,1000),maxActors:number('MAX_VIEWERS_PER_STREAM',30,1,1000),maxQueue:number('MAX_EVENTS_PER_STREAM',1000,10,100000),
   maxInbox:number('MAX_INBOX_PER_STREAM',10000,100,100000),eventTTL:number('EVENT_TTL_MS',120000,10000,3600000),leaseMs:number('DELIVERY_LEASE_MS',20000,5000,120000),

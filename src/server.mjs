@@ -22,7 +22,7 @@ async function readJSON(req,maxBytes=65536){
 export function createAPI(store,config,{log=()=>{},thumbnailFetch=fetch}={}){
  const overlays=new Overlays(store.db,()=>store.now());
  const avatars=new AvatarCache({fetcher:thumbnailFetch,now:()=>store.now()});
- const publishOverlay=(key,b)=>{const result=overlays.publish(key,b);avatars.enqueue(b.snapshot.racers.map(r=>r.robloxId));return result;};
+ const publishOverlay=(key,b,universe)=>{const result=overlays.publish(key,b,universe);avatars.enqueue(b.snapshot.racers.map(r=>r.robloxId));return result;};
  const assets=new Map();
  for(const [url,file,type] of [["/overlay","index.html","text/html; charset=utf-8"],["/overlay/app.js","app.js","text/javascript; charset=utf-8"],["/overlay/overlay.css","overlay.css","text/css; charset=utf-8"],["/overlay/art.png","art.png","image/png"],["/overlay/marker-layout.js","marker-layout.js","text/javascript; charset=utf-8"]]){try{assets.set(url,{data:readFileSync(new URL("../public/overlay/"+file,import.meta.url)),type});}catch{}}
  // Content-addressed asset names also work when a proxy forces a long browser cache.
@@ -40,7 +40,7 @@ export function createAPI(store,config,{log=()=>{},thumbnailFetch=fetch}={}){
  function rate(key,max){const now=store.now();const r=rates.get(key);if(!r||r.until<=now){rates.set(key,{n:1,until:now+60000});return;}if(++r.n>max)throw new Fault('rate_limited',429);}
  const housekeeping=setInterval(()=>{for(const [key,r] of rates)if(r.until<store.now())rates.delete(key);overlays.sweep();},60000);housekeeping.unref();
  const server=createServer({maxHeaderSize:8192,requestTimeout:15000,headersTimeout:10000,keepAliveTimeout:5000},async(req,res)=>{
-  const send=(status,data)=>{if(res.destroyed)return;res.writeHead(status,{'content-type':'application/json; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff',...(status===429?{'retry-after':'60'}:{})});res.end(JSON.stringify(data));};
+  const send=(status,data)=>{if(res.destroyed)return;res.writeHead(status,{'content-type':'application/json; charset=utf-8','cache-control':'no-store','referrer-policy':'no-referrer','x-content-type-options':'nosniff',...(status===429?{'retry-after':'60'}:{})});res.end(JSON.stringify(data));};
   try{
    const url=new URL(req.url,'http://bridge.internal'),path=url.pathname,method=req.method;
    if(path==='/healthz'&&method==='GET'){store.db.prepare('SELECT 1').get();send(200,{ok:true,service:'hyperrun-live-bridge',features:{overlay:true}});return;}
@@ -48,13 +48,33 @@ export function createAPI(store,config,{log=()=>{},thumbnailFetch=fetch}={}){
    const privileged=key=>{if(!constantEqual(token,key))throw new Fault('unauthorized',401);};
    const asset=assets.get(path);
    if(asset&&method==='GET'){res.writeHead(200,{'content-type':asset.type,'cache-control':asset.immutable?'public, max-age=31536000, immutable':'no-store','x-content-type-options':'nosniff','referrer-policy':'no-referrer','content-security-policy':"default-src 'self'; img-src 'self' data: https://*.rbxcdn.com; style-src 'self'; script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"});res.end(asset.data);return;}
-   if(path==='/v1/overlays/claim'&&method==='POST'){privileged(config.bridgeKey);rate('overlay-claim',600);send(200,overlays.claim(await readJSON(req)));return;}
+   const publisherScope=()=>{
+    if(constantEqual(token,config.bridgeKey))return '';
+    for(const [universe,key]of Object.entries(config.overlayMapKeys??{}))if(constantEqual(token,key))return universe;
+    throw new Fault('unauthorized',401);
+   };
+   if(path==='/v1/integrations/tikkies/overlay-links'&&method==='POST'){
+    if(!config.overlayServiceKey)throw new Fault('integration_disabled',503);
+    privileged(config.overlayServiceKey);rate('tikkies-overlay-links',120);
+    const b=await readJSON(req,4096);
+    const validID=x=>typeof x==='string'&&/^[1-9]\d{0,15}$/.test(x)&&BigInt(x)<=9007199254740991n;
+    if(!validID(b.ownerRobloxId)||!validID(b.universeId))throw new Fault('invalid_overlay_claim');
+    if(!(config.overlayUniverses??[]).includes(b.universeId))throw new Fault('overlay_universe_forbidden',403);
+    const p=overlays.profile(b.ownerRobloxId,b.universeId);
+    const urls=Object.fromEntries(['map','ranking','speed','all'].map(view=>[view,config.overlayOrigin+'/overlay?view='+view+'#'+p.readToken]));
+    send(200,{ok:true,schemaVersion:2,ownerRobloxId:b.ownerRobloxId,universeId:b.universeId,online:p.online,urls});return;
+   }
+   if(path==='/v1/overlays/claim'&&method==='POST'){
+    const universe=publisherScope();rate('overlay-claim:'+universe,600);const b=await readJSON(req,4096);
+    if((universe===''&&b.universeId!==undefined)||(universe!==''&&b.universeId!==universe))throw new Fault('overlay_scope_mismatch',403);
+    send(200,overlays.claim(b));return;
+   }
    if(path==='/v1/overlays/publish'&&method==='POST'){send(200,publishOverlay(token,await readJSON(req)));return;}
    if(path==='/v1/overlays/release'&&method==='POST'){send(200,overlays.release(token));return;}
    if(path==='/v1/overlays/batch'&&method==='POST'){
-    privileged(config.bridgeKey);const body=await readJSON(req,262144);
+    const universe=publisherScope();rate('overlay-batch:'+universe,240);const body=await readJSON(req,262144);
     if(!Array.isArray(body.items)||body.items.length>100)throw new Fault('invalid_overlay_batch');
-    const results=body.items.map(item=>{try{return publishOverlay(item?.writeToken,{sequence:item?.sequence,snapshot:{...item?.snapshot,...(body.route?{route:body.route}:{})}});}catch(e){return {ok:false,error:e instanceof Fault?e.code:'internal_error'};}});
+    const results=body.items.map(item=>{try{return publishOverlay(item?.writeToken,{sequence:item?.sequence,snapshot:{...item?.snapshot,...(body.route?{route:body.route}:{})}},universe);}catch(e){return {ok:false,error:e instanceof Fault?e.code:'internal_error'};}});
     send(200,{results});return;
    }
    if(path==='/v1/overlay/state'&&method==='GET'){const state=overlays.read(token);if(state.snapshot)state.snapshot={...state.snapshot,racers:state.snapshot.racers.map(r=>({...r,avatarUrl:avatars.get(r.robloxId)}))};send(200,state);return;}

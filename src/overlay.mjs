@@ -25,40 +25,56 @@ export class Overlays{
  constructor(db,now=Date.now){
   this.db=db;this.now=now;this.live=new Map();
   db.exec('CREATE TABLE IF NOT EXISTS overlay_profiles(owner_id TEXT PRIMARY KEY,read_token TEXT UNIQUE NOT NULL)');
+  db.exec('CREATE TABLE IF NOT EXISTS overlay_profiles_v2(universe_id TEXT NOT NULL,owner_id TEXT NOT NULL,read_token TEXT UNIQUE NOT NULL,PRIMARY KEY(universe_id,owner_id))');
+ }
+ scope(owner,universe){return universe===undefined?'legacy:'+owner:'game:'+universe+':'+owner;}
+ profile(owner,universe){
+  if(!id(owner)||(universe!==undefined&&!id(universe)))throw new Fault('invalid_overlay_claim');
+  let p;
+  if(universe===undefined){
+   this.db.prepare('INSERT INTO overlay_profiles(owner_id,read_token) VALUES(?,?) ON CONFLICT(owner_id) DO NOTHING').run(owner,token());
+   p=this.db.prepare('SELECT read_token FROM overlay_profiles WHERE owner_id=?').get(owner);
+  }else{
+   this.db.prepare('INSERT INTO overlay_profiles_v2(universe_id,owner_id,read_token) VALUES(?,?,?) ON CONFLICT(universe_id,owner_id) DO NOTHING').run(universe,owner,token());
+   p=this.db.prepare('SELECT read_token FROM overlay_profiles_v2 WHERE universe_id=? AND owner_id=?').get(universe,owner);
+  }
+  const l=this.live.get(this.scope(owner,universe));
+  return {readToken:p.read_token,online:!!l&&l.lastPublish!==undefined&&this.now()-l.lastPublish<5000};
  }
  claim(b){
-  if(!b||!id(b.ownerRobloxId)||!text(b.jobId,128)||!text(b.claimId,128))throw new Fault('invalid_overlay_claim');
-  const now=this.now();this.sweep();const current=this.live.get(b.ownerRobloxId);
+  if(!b||!id(b.ownerRobloxId)||(b.universeId!==undefined&&!id(b.universeId))||!text(b.jobId,128)||!text(b.claimId,128))throw new Fault('invalid_overlay_claim');
+  const now=this.now();this.sweep();const scope=this.scope(b.ownerRobloxId,b.universeId),current=this.live.get(scope);
   if(current&&now-current.seen<45000&&(current.jobId!==b.jobId||current.claimId!==b.claimId))throw new Fault('overlay_owner_busy',409);
-  let p=this.db.prepare('SELECT read_token FROM overlay_profiles WHERE owner_id=?').get(b.ownerRobloxId);
-  if(!p){p={read_token:token()};this.db.prepare('INSERT INTO overlay_profiles VALUES(?,?)').run(b.ownerRobloxId,p.read_token);}
+  const p=this.profile(b.ownerRobloxId,b.universeId);
   if(!current||now-current.seen>=45000||current.jobId!==b.jobId||current.claimId!==b.claimId){
    if(!current&&this.live.size>=200)throw new Fault('overlay_capacity',429);
-   this.live.set(b.ownerRobloxId,{jobId:b.jobId,claimId:b.claimId,writeToken:token(),seen:now,sequence:0,state:null});
+   this.live.set(scope,{universeId:b.universeId,jobId:b.jobId,claimId:b.claimId,writeToken:token(),seen:now,sequence:0,state:null});
   }
-  const l=this.live.get(b.ownerRobloxId);l.seen=now;
-  return {readToken:p.read_token,writeToken:l.writeToken,interval:1};
+  const l=this.live.get(scope);l.seen=now;
+  return {readToken:p.readToken,writeToken:l.writeToken,interval:1,...(b.universeId?{schemaVersion:2,universeId:b.universeId}:{})};
  }
- publish(key,b){
+ publish(key,b,expectedUniverse){
   let l;for(const entry of this.live.values())if(constantEqual(entry.writeToken,key)){l=entry;break;}
   if(!l||this.now()-l.seen>=45000)throw new Fault('overlay_lease_expired',401);
+  // Batch credentials can only publish their own universe; empty string is legacy-only.
+  if(expectedUniverse!==undefined&&(l.universeId??'')!==expectedUniverse)throw new Fault('overlay_scope_mismatch',403);
+  if(b?.universeId!==undefined&&b.universeId!==l.universeId)throw new Fault('overlay_scope_mismatch',403);
   if(l.lastPublish!==undefined&&this.now()-l.lastPublish<400)throw new Fault('overlay_rate_limited',429);
   if(!Number.isSafeInteger(b?.sequence)||b.sequence<=l.sequence)throw new Fault('stale_overlay_snapshot',409);
-  const state=validateSnapshot(b.snapshot,!!l.state?.route);
-  const previous=l.state;
-  // topSpeed is a compatibility alias for current speed, never a historical record.
+  const state=validateSnapshot(b.snapshot,!!l.state?.route),previous=l.state;
   l.state={...state,route:state.route??previous.route};l.sequence=b.sequence;l.seen=this.now();l.lastPublish=l.seen;
   return {ok:true};
  }
  release(key){
-  for(const [id,l]of this.live)if(constantEqual(l.writeToken,key)){this.live.delete(id);return {ok:true};}
+  for(const [scope,l]of this.live)if(constantEqual(l.writeToken,key)){this.live.delete(scope);return {ok:true};}
   throw new Fault('overlay_lease_expired',401);
  }
  read(key){
   if(typeof key!=='string'||!/^[A-Za-z0-9_-]{43}$/.test(key))throw new Fault('unauthorized',401);
-  const p=this.db.prepare('SELECT owner_id FROM overlay_profiles WHERE read_token=?').get(key);if(!p)throw new Fault('unauthorized',401);
-  const l=this.live.get(p.owner_id);const age=l?this.now()-l.seen:Infinity;
-  return {online:!!l&&age<5000,sequence:l?.sequence??0,ageMs:Number.isFinite(age)?age:null,snapshot:l?.state??null};
+  const scoped=this.db.prepare('SELECT owner_id,universe_id FROM overlay_profiles_v2 WHERE read_token=?').get(key);
+  const p=scoped??this.db.prepare('SELECT owner_id FROM overlay_profiles WHERE read_token=?').get(key);if(!p)throw new Fault('unauthorized',401);
+  const l=this.live.get(this.scope(p.owner_id,p.universe_id)),age=l?this.now()-l.seen:Infinity;
+  return {online:!!l&&l.lastPublish!==undefined&&this.now()-l.lastPublish<5000,sequence:l?.sequence??0,ageMs:Number.isFinite(age)?age:null,snapshot:l?.state??null};
  }
- sweep(){for(const [id,l]of this.live)if(this.now()-l.seen>300000)this.live.delete(id);}
+ sweep(){for(const [key,l]of this.live)if(this.now()-l.seen>300000)this.live.delete(key);}
 }
