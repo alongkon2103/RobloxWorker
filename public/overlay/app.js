@@ -15,7 +15,7 @@ function setState(data){
  if(!data.snapshot||data.sequence===lastSequence)return;
  const s=data.snapshot;if(s.round!==lastRound){frames=[];lastRound=s.round;}
  lastSequence=data.sequence;frames.push({at:now,s});while(frames.length>5)frames.shift();
- if(!route||route.version!==s.route.version){route=s.route;const xs=route.points.map(p=>p[0]),ys=route.points.map(p=>p[1]);const minX=Math.min(...xs),maxX=Math.max(...xs),minY=Math.min(...ys),maxY=Math.max(...ys),scale=Math.min(720/Math.max(1,maxX-minX),680/Math.max(1,maxY-minY));const turn=maxX-minX>(maxY-minY)*1.15;const fit=turn?Math.min(720/Math.max(1,maxY-minY),680/Math.max(1,maxX-minX)):scale;project=p=>{const x=p[0]-(minX+maxX)/2,y=p[1]-(minY+maxY)/2;return turn?[450+y*fit,430-x*fit]:[450+x*fit,430+y*fit];};}
+ if(!route||route.version!==s.route.version){route=s.route;const xs=route.points.map(p=>p[0]),ys=route.points.map(p=>p[1]);const minX=Math.min(...xs),maxX=Math.max(...xs),minY=Math.min(...ys),maxY=Math.max(...ys),scale=Math.min(720/Math.max(1,maxX-minX),680/Math.max(1,maxY-minY));project=p=>[450+(p[0]-(minX+maxX)/2)*scale,430+(p[1]-(minY+maxY)/2)*scale];}
  document.querySelector('#round').textContent='ROUND '+s.round.split(':').at(-1);
  document.querySelector('#count').textContent=s.racers.length+' RUNNERS';document.querySelector('#phase').textContent={Lobby:'WAITING',Countdown:'GET READY',Running:'RACING',Results:'FINISH!'}[s.phase];
  document.querySelector('#empty').style.display=s.racers.length?'none':'flex';
@@ -32,7 +32,7 @@ function rendered(){
 function point(distance){
  const n=route.points.length,d=((Math.max(0,distance)%route.length)/route.length)*n,i=Math.floor(d)%n,f=d-Math.floor(d),a=route.points[i],b=route.points[(i+1)%n];return project([a[0]+(b[0]-a[0])*f,a[1]+(b[1]-a[1])*f]);
 }
-const markerOffsets=new Map();let lastDraw=0;let layoutKey="",layoutOffsets=new Map();
+const markerOffsets=new Map();let lastDraw=0,lastPortraitMeta=0;
 function draw(s,now){
  const blend=1-Math.exp(-Math.min(.1,(now-lastDraw)/1000)*14);lastDraw=now;
  ctx.clearRect(0,0,900,880);if(!route||!project)return;
@@ -47,13 +47,8 @@ function draw(s,now){
  ctx.beginPath();route.points.forEach((p,i)=>{const [x,y]=project(p);i?ctx.lineTo(x,y):ctx.moveTo(x,y);});ctx.closePath();ctx.strokeStyle='#ffffff80';ctx.lineWidth=2;ctx.stroke();
  const start=point(0);ctx.fillStyle='#fff';ctx.fillRect(start[0]-12,start[1]-14,24,28);ctx.fillStyle='#101c31';for(let i=0;i<3;i++)for(let j=0;j<4;j++)if((i+j)%2===0)ctx.fillRect(start[0]-12+i*8,start[1]-14+j*7,8,7);
  if(!s)return;
- const anchors=s.racers.map(r=>{const [x,y]=point(r.distance);return {id:r.id,racer:r,x,y,radius:r.rank===1?26:22};});
- const sorted=[...anchors].sort((a,b)=>a.id.localeCompare(b.id)),origin=sorted[0];
- const key=sorted.map(a=>a.id+":"+a.radius+":"+Math.round((a.x-origin.x)/2)+":"+Math.round((a.y-origin.y)/2)).join("|");
- let markers=anchors.map(a=>{const o=layoutOffsets.get(a.id)??{x:0,y:0};return {...a,x:a.x+o.x,y:a.y+o.y,anchorX:a.x,anchorY:a.y};});
- if(key!==layoutKey||markers.some(m=>m.x<m.radius+4||m.y<m.radius+4||m.x>896-m.radius||m.y>876-m.radius)){
-  markers=separateMarkers(anchors);layoutKey=key;layoutOffsets=new Map(markers.map(m=>[m.id,{x:m.x-m.anchorX,y:m.y-m.anchorY}]));
- }
+ const anchors=s.racers.map(r=>{const [x,y]=point(r.distance);const before=point(r.distance-1),after=point(r.distance+1);return {id:r.id,racer:r,x,y,tx:after[0]-before[0],ty:after[1]-before[1],radius:r.rank===1?26:22};});
+ const markers=separateMarkers(anchors);
  const keep=new Set(markers.map(m=>m.id));
  for(const id of markerOffsets.keys())if(!keep.has(id))markerOffsets.delete(id);
  for(const m of markers){
@@ -61,9 +56,9 @@ function draw(s,now){
   offset.x+=(target.x-offset.x)*blend;offset.y+=(target.y-offset.y)*blend;markerOffsets.set(m.id,offset);
   m.x=m.anchorX+offset.x;m.y=m.anchorY+offset.y;
  }
- canvas.dataset.portraits=JSON.stringify(markers.map(m=>({id:m.id,x:Math.round(m.x),y:Math.round(m.y)})));
- for(const m of markers){if(Math.hypot(m.x-m.anchorX,m.y-m.anchorY)>5){ctx.beginPath();ctx.moveTo(m.anchorX,m.anchorY);ctx.lineTo(m.x,m.y);ctx.strokeStyle=color(m.racer);ctx.lineWidth=2;ctx.stroke();ctx.beginPath();ctx.arc(m.anchorX,m.anchorY,3,0,Math.PI*2);ctx.fillStyle='#fff';ctx.fill();}}
- for(const m of markers){
+ if(now-lastPortraitMeta>250){canvas.dataset.portraits=JSON.stringify(markers.map(m=>({id:m.id,x:Math.round(m.x),y:Math.round(m.y)})));lastPortraitMeta=now;}
+
+ for(const m of [...markers].sort((a,b)=>(b.racer.rank||999)-(a.racer.rank||999)||a.id.localeCompare(b.id))){
   const r=m.racer,x=m.x,y=m.y,size=m.radius;ctx.shadowColor='#0008';ctx.shadowBlur=6;ctx.beginPath();ctx.arc(x,y,size+3,0,Math.PI*2);ctx.fillStyle='#122239';ctx.fill();ctx.beginPath();ctx.arc(x,y,size,0,Math.PI*2);ctx.fillStyle=color(r);ctx.fill();ctx.shadowBlur=0;const avatar=avatarImages.get(r.robloxId)?.img;
   ctx.save();ctx.beginPath();ctx.arc(x,y,size-1,0,Math.PI*2);ctx.clip();
   if(avatar?.complete&&avatar.naturalWidth>0)ctx.drawImage(avatar,x-size,y-size,size*2,size*2);
