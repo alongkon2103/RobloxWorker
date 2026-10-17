@@ -16,3 +16,5 @@ test('naruto can be mapped to a TikTok gift',()=>{
 });
 
 test('stacking speed boost can be mapped to a TikTok gift',()=>{assert.deepEqual(validateGiftMap({321:{key:'speed_boost',value:1}}),{321:{key:'speed_boost',value:1}});});
+
+test('fly can be mapped to a TikTok gift',()=>{assert.deepEqual(validateGiftMap({322:{key:'fly',value:1}}),{322:{key:'fly',value:1}});});

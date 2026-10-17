@@ -118,7 +118,7 @@ export function createAPI(store,config,{log=()=>{},thumbnailFetch=fetch}={}){
 }
 function validateEffects(effects){
  if(!Array.isArray(effects)||effects.length>200)throw new Fault('invalid_effects');
- return effects.map(e=>{if(!e||!['rocket','rainbow_cat','naruto','speed_boost','jump','heal','power'].includes(e.key)||!Number.isFinite(e.value)||e.value<0||e.value>1e9||!Number.isSafeInteger(e.count)||e.count<1||e.count>10000)throw new Fault('invalid_effects');return {key:e.key,value:e.value,count:e.count};});
+ return effects.map(e=>{if(!e||!['rocket','rainbow_cat','naruto','fly','speed_boost','jump','heal','power'].includes(e.key)||!Number.isFinite(e.value)||e.value<0||e.value>1e9||!Number.isSafeInteger(e.count)||e.count<1||e.count>10000)throw new Fault('invalid_effects');return {key:e.key,value:e.value,count:e.count};});
 }
 function acknowledge(store,id,body){
  const eventId=eventID(body.eventId),receipt=string(body.receipt,/^[A-Za-z0-9_-]{1,128}$/,'receipt');

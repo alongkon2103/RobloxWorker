@@ -2,7 +2,7 @@ import {readFileSync} from 'node:fs';import {resolve} from 'node:path';import {F
 export function validateGiftMap(value){
  if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).length>200)throw new Fault('invalid_gift_map');
  const result={};for(const [id,effect] of Object.entries(value)){
-  if(!/^\d{1,20}$/.test(id)||!effect||!['rocket','rainbow_cat','naruto','speed_boost','jump','heal','power'].includes(effect.key)||!Number.isFinite(effect.value)||effect.value<0||effect.value>1e9)throw new Fault('invalid_gift_map');
+  if(!/^\d{1,20}$/.test(id)||!effect||!['rocket','rainbow_cat','naruto','fly','speed_boost','jump','heal','power'].includes(effect.key)||!Number.isFinite(effect.value)||effect.value<0||effect.value>1e9)throw new Fault('invalid_gift_map');
   result[id]={key:effect.key,value:effect.value};
  }return result;
 }
