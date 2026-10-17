@@ -3,7 +3,7 @@ import {Store} from '../src/store.mjs';import {Overlays} from '../src/overlay.mj
 const route={version:'r1',length:100,points:[[0,0],[20,0],[20,20],[0,20]]};
 const racer={id:'live:a',robloxId:'1',name:'Alice',distance:10,speed:16,topSpeed:20,rank:1,state:'Running',effects:[]};
 const snapshot=(extra={})=>({round:'round1',phase:'Running',laps:2,metersPerStud:.28,route,racers:[{...racer}],...extra});
-test('overlay isolation, exclusive leases, fresh takeover, stable profile, peaks and validation',()=>{
+test('overlay isolation, exclusive leases, fresh takeover, stable profile, current speed and validation',()=>{
  const store=new Store(':memory:');let now=1000;const o=new Overlays(store.db,()=>now);
  try{
   const a=o.claim({ownerRobloxId:'1',jobId:'job1',claimId:'claim1'});const b=o.claim({ownerRobloxId:'2',jobId:'job2',claimId:'claim2'});
@@ -11,7 +11,7 @@ test('overlay isolation, exclusive leases, fresh takeover, stable profile, peaks
   o.publish(a.writeToken,{sequence:1,snapshot:snapshot()});assert.equal(o.read(b.readToken).snapshot,null);
   assert.throws(()=>o.publish(a.readToken,{sequence:2,snapshot:snapshot()}),/lease_expired/);
   assert.throws(()=>o.read(a.writeToken),/unauthorized/);assert.throws(()=>o.read('1'),/unauthorized/);
-  now+=1000;o.publish(a.writeToken,{sequence:2,snapshot:snapshot({route:undefined,racers:[{...racer,topSpeed:16}]})});assert.equal(o.read(a.readToken).snapshot.racers[0].topSpeed,20);
+  now+=1000;o.publish(a.writeToken,{sequence:2,snapshot:snapshot({route:undefined,racers:[{...racer,topSpeed:16}]})});assert.equal(o.read(a.readToken).snapshot.racers[0].topSpeed,16);
   now+=1000;assert.throws(()=>o.publish(a.writeToken,{sequence:2,snapshot:snapshot()}),/stale/);
   assert.throws(()=>o.publish(a.writeToken,{sequence:3,snapshot:snapshot({racers:[{...racer,speed:1501}]})}),/invalid_racer/);
   o.publish(a.writeToken,{sequence:3,snapshot:snapshot({round:'round2',racers:[{...racer,topSpeed:16}]})});assert.equal(o.read(a.readToken).snapshot.racers[0].topSpeed,16);
@@ -40,4 +40,11 @@ test('overlay HTTP: bridge-only claim, read-only URL, static CSP and real snapsh
   const html=await fetch(origin+'/overlay?view=map');assert.equal(html.status,200);assert.match(html.headers.get('content-security-policy'),/default-src 'self'/);assert.match(await html.text(),/app.js/);
   assert.equal((await fetch(origin+'/overlay/../../.env')).status,404);
  }finally{server.closeAllConnections();await new Promise(r=>server.close(r));store.close();}
+});
+test('speed ranking data drops with the current speed instead of retaining a peak',()=>{
+ const store=new Store(':memory:');let now=1000;const o=new Overlays(store.db,()=>now);
+ try{const lease=o.claim({ownerRobloxId:'1',jobId:'j',claimId:'c'});
+ o.publish(lease.writeToken,{sequence:1,snapshot:snapshot({racers:[{...racer,speed:400,topSpeed:999}]})});assert.equal(o.read(lease.readToken).snapshot.racers[0].topSpeed,400);
+ now+=1000;o.publish(lease.writeToken,{sequence:2,snapshot:snapshot({racers:[{...racer,speed:16,topSpeed:999}]})});assert.equal(o.read(lease.readToken).snapshot.racers[0].topSpeed,16);
+ }finally{store.close();}
 });

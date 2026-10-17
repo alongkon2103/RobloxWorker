@@ -12,14 +12,14 @@ export function validateSnapshot(s,hasRoute=false){
  }else if(!hasRoute)throw new Fault('route_required',409);
  const seen=new Set();
  for(const r of s.racers){
-  if(!r||!text(r.id,200)||seen.has(r.id)||!id(r.robloxId)||!text(r.name,80)||!finite(r.distance,-1e5,1e10)||!finite(r.speed,0,1500)||!finite(r.topSpeed,0,1500)||!finite(r.rank,0,100)||!['Lobby','Waiting','Queued','Countdown','Running','Finished','DNF'].includes(r.state)||!Array.isArray(r.effects)||r.effects.length>32)throw new Fault('invalid_racer');
+  if(!r||!text(r.id,200)||seen.has(r.id)||!id(r.robloxId)||!text(r.name,80)||!finite(r.distance,-1e5,1e10)||!finite(r.speed,0,1500)||!finite(r.rank,0,100)||!['Lobby','Waiting','Queued','Countdown','Running','Finished','DNF'].includes(r.state)||!Array.isArray(r.effects)||r.effects.length>32)throw new Fault('invalid_racer');
   seen.add(r.id);
   for(const e of r.effects)if(!e||!text(e.key,64)||!finite(e.remaining,0,1e9)||!finite(e.tier,-1e6,1e6))throw new Fault('invalid_effect');
  }
  // Copy only the public presentation fields, never forward arbitrary publisher data.
  return {round:s.round,phase:s.phase,laps:s.laps,metersPerStud:s.metersPerStud,
   ...(s.route?{route:{version:s.route.version,length:s.route.length,points:s.route.points}}:{}),
-  racers:s.racers.map(r=>({id:r.id,robloxId:r.robloxId,name:r.name,distance:r.distance,speed:r.speed,topSpeed:r.topSpeed,rank:r.rank,state:r.state,effects:r.effects.map(e=>({key:e.key,remaining:e.remaining,tier:e.tier}))}))};
+  racers:s.racers.map(r=>({id:r.id,robloxId:r.robloxId,name:r.name,distance:r.distance,speed:r.speed,topSpeed:r.speed,rank:r.rank,state:r.state,effects:r.effects.map(e=>({key:e.key,remaining:e.remaining,tier:e.tier}))}))};
 }
 export class Overlays{
  constructor(db,now=Date.now){
@@ -46,9 +46,7 @@ export class Overlays{
   if(!Number.isSafeInteger(b?.sequence)||b.sequence<=l.sequence)throw new Fault('stale_overlay_snapshot',409);
   const state=validateSnapshot(b.snapshot,!!l.state?.route);
   const previous=l.state;
-  const reset=!previous||previous.round!==state.round;
-  // Keep observed peaks for this round, even if a publisher omits a transient peak.
-  for(const r of state.racers){const old=!reset&&previous.racers.find(x=>x.id===r.id);r.topSpeed=Math.max(r.speed,r.topSpeed,old?.topSpeed??0);}
+  // topSpeed is a compatibility alias for current speed, never a historical record.
   l.state={...state,route:state.route??previous.route};l.sequence=b.sequence;l.seen=this.now();l.lastPublish=l.seen;
   return {ok:true};
  }
