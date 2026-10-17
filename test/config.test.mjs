@@ -14,3 +14,5 @@ test('rainbow_cat can be mapped to a TikTok gift',()=>{
 test('naruto can be mapped to a TikTok gift',()=>{
  assert.doesNotThrow(()=>validateGiftMap({777:{key:'naruto',value:1}}));
 });
+
+test('stacking speed boost can be mapped to a TikTok gift',()=>{assert.deepEqual(validateGiftMap({321:{key:'speed_boost',value:1}}),{321:{key:'speed_boost',value:1}});});
