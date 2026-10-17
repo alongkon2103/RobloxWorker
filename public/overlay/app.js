@@ -61,6 +61,7 @@ function draw(s,now){
   offset.x+=(target.x-offset.x)*blend;offset.y+=(target.y-offset.y)*blend;markerOffsets.set(m.id,offset);
   m.x=m.anchorX+offset.x;m.y=m.anchorY+offset.y;
  }
+ canvas.dataset.portraits=JSON.stringify(markers.map(m=>({id:m.id,x:Math.round(m.x),y:Math.round(m.y)})));
  for(const m of markers){if(Math.hypot(m.x-m.anchorX,m.y-m.anchorY)>5){ctx.beginPath();ctx.moveTo(m.anchorX,m.anchorY);ctx.lineTo(m.x,m.y);ctx.strokeStyle=color(m.racer);ctx.lineWidth=2;ctx.stroke();ctx.beginPath();ctx.arc(m.anchorX,m.anchorY,3,0,Math.PI*2);ctx.fillStyle='#fff';ctx.fill();}}
  for(const m of markers){
   const r=m.racer,x=m.x,y=m.y,size=m.radius;ctx.shadowColor='#0008';ctx.shadowBlur=6;ctx.beginPath();ctx.arc(x,y,size+3,0,Math.PI*2);ctx.fillStyle='#122239';ctx.fill();ctx.beginPath();ctx.arc(x,y,size,0,Math.PI*2);ctx.fillStyle=color(r);ctx.fill();ctx.shadowBlur=0;const avatar=avatarImages.get(r.robloxId)?.img;
