@@ -1,3 +1,6 @@
+import {AvatarCache} from './overlay-avatars.mjs';
+import {readFileSync} from 'node:fs';
+import {Overlays} from './overlay.mjs';
 import {createServer} from 'node:http';
 import {Fault,constantEqual} from './store.mjs';import {validateGiftMap} from './config.mjs';
 const string=(x,pattern,name)=>{if(typeof x!=='string'||!pattern.test(x))throw new Fault(`invalid_${name}`);return x;};
@@ -10,22 +13,39 @@ function sessionBody(body){
  const joinMode=body.joinMode??'at';if(!['at','plain','both'].includes(joinMode))throw new Fault('invalid_join_mode');
  return {joinMode,ownerRobloxId:positiveID(body.ownerRobloxId,'owner_id'),jobId:job(body.jobId),tiktokUsername,provider,giftMap:body.giftMap===undefined?null:validateGiftMap(body.giftMap)};
 }
-async function readJSON(req){
+async function readJSON(req,maxBytes=65536){
  if(!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type']??''))throw new Fault('json_required',415);
- let size=0;const chunks=[];for await(const chunk of req){size+=chunk.length;if(size>65536)throw new Fault('body_too_large',413);chunks.push(chunk);}
+ let size=0;const chunks=[];for await(const chunk of req){size+=chunk.length;if(size>maxBytes)throw new Fault('body_too_large',413);chunks.push(chunk);}
  try{const body=JSON.parse(Buffer.concat(chunks).toString('utf8')||'{}');if(!body||typeof body!=='object'||Array.isArray(body))throw new Error();return body;}catch{throw new Fault('invalid_json');}
 }
-export function createAPI(store,config,{log=()=>{}}={}){
+export function createAPI(store,config,{log=()=>{},thumbnailFetch=fetch}={}){
+ const overlays=new Overlays(store.db,()=>store.now());
+ const avatars=new AvatarCache({fetcher:thumbnailFetch,now:()=>store.now()});
+ const publishOverlay=(key,b)=>{const result=overlays.publish(key,b);avatars.enqueue(b.snapshot.racers.map(r=>r.robloxId));return result;};
+ const assets=new Map();
+ for(const [url,file,type] of [["/overlay","index.html","text/html; charset=utf-8"],["/overlay/app.js","app.js","text/javascript; charset=utf-8"],["/overlay/overlay.css","overlay.css","text/css; charset=utf-8"],["/overlay/art.png","art.png","image/png"]]){try{assets.set(url,{data:readFileSync(new URL("../public/overlay/"+file,import.meta.url)),type});}catch{}}
  const rates=new Map();
  function rate(key,max){const now=store.now();const r=rates.get(key);if(!r||r.until<=now){rates.set(key,{n:1,until:now+60000});return;}if(++r.n>max)throw new Fault('rate_limited',429);}
- const housekeeping=setInterval(()=>{for(const [key,r] of rates)if(r.until<store.now())rates.delete(key);},60000);housekeeping.unref();
+ const housekeeping=setInterval(()=>{for(const [key,r] of rates)if(r.until<store.now())rates.delete(key);overlays.sweep();},60000);housekeeping.unref();
  const server=createServer({maxHeaderSize:8192,requestTimeout:15000,headersTimeout:10000,keepAliveTimeout:5000},async(req,res)=>{
   const send=(status,data)=>{if(res.destroyed)return;res.writeHead(status,{'content-type':'application/json; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff',...(status===429?{'retry-after':'60'}:{})});res.end(JSON.stringify(data));};
   try{
    const url=new URL(req.url,'http://bridge.internal'),path=url.pathname,method=req.method;
-   if(path==='/healthz'&&method==='GET'){store.db.prepare('SELECT 1').get();send(200,{ok:true,service:'hyperrun-live-bridge'});return;}
+   if(path==='/healthz'&&method==='GET'){store.db.prepare('SELECT 1').get();send(200,{ok:true,service:'hyperrun-live-bridge',features:{overlay:true}});return;}
    const token=req.headers.authorization?.match(/^Bearer ([^\s]+)$/)?.[1];
    const privileged=key=>{if(!constantEqual(token,key))throw new Fault('unauthorized',401);};
+   const asset=assets.get(path);
+   if(asset&&method==='GET'){res.writeHead(200,{'content-type':asset.type,'cache-control':'no-cache','x-content-type-options':'nosniff','referrer-policy':'no-referrer','content-security-policy':"default-src 'self'; img-src 'self' data: https://*.rbxcdn.com; style-src 'self'; script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"});res.end(asset.data);return;}
+   if(path==='/v1/overlays/claim'&&method==='POST'){privileged(config.bridgeKey);rate('overlay-claim',600);send(200,overlays.claim(await readJSON(req)));return;}
+   if(path==='/v1/overlays/publish'&&method==='POST'){send(200,publishOverlay(token,await readJSON(req)));return;}
+   if(path==='/v1/overlays/release'&&method==='POST'){send(200,overlays.release(token));return;}
+   if(path==='/v1/overlays/batch'&&method==='POST'){
+    privileged(config.bridgeKey);const body=await readJSON(req,262144);
+    if(!Array.isArray(body.items)||body.items.length>100)throw new Fault('invalid_overlay_batch');
+    const results=body.items.map(item=>{try{return publishOverlay(item?.writeToken,{sequence:item?.sequence,snapshot:{...item?.snapshot,...(body.route?{route:body.route}:{})}});}catch(e){return {ok:false,error:e instanceof Fault?e.code:'internal_error'};}});
+    send(200,{results});return;
+   }
+   if(path==='/v1/overlay/state'&&method==='GET'){const state=overlays.read(token);if(state.snapshot)state.snapshot={...state.snapshot,racers:state.snapshot.racers.map(r=>({...r,avatarUrl:avatars.get(r.robloxId)}))};send(200,state);return;}
    const view=s=>({...store.public(s),giftMap:store.effectiveGiftMap(s.id,config.giftMap)});
    if(path==='/v1/sessions'&&method==='POST'){
     privileged(config.bridgeKey);rate('create',120);const body=sessionBody(await readJSON(req));
@@ -82,7 +102,7 @@ export function createAPI(store,config,{log=()=>{}}={}){
    throw new Fault('not_found',404);
   }catch(error){const status=error instanceof Fault?error.status:500;if(status===500)log({event:'http_internal_error'});send(status,{error:error instanceof Fault?error.code:'internal_error'});}
  });
- server.on('close',()=>clearInterval(housekeeping));return server;
+ server.on('close',()=>{clearInterval(housekeeping);avatars.close();});return server;
 }
 function validateEffects(effects){
  if(!Array.isArray(effects)||effects.length>200)throw new Fault('invalid_effects');
