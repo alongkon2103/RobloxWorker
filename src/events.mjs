@@ -17,7 +17,9 @@ export function compactMessage(message){
  }
  if(type==='WebcastSocialMessage'||type==='WebcastFollowMessage'){
   const display=String(d.common?.displayText?.key??d.displayType??'').toLowerCase();
-  data.socialType=type==='WebcastFollowMessage'||display.includes('follow')&&!display.includes('unfollow')?'follow':display.includes('share')?'share':'unknown';
+  const actionFollow=d.action===1||d.action==='1';
+  data.socialType=type==='WebcastFollowMessage'?'follow':display.includes('unfollow')?'unknown':
+   display.includes('share')?'share':display.includes('follow')||actionFollow?'follow':'unknown';
  }
  data.roomId=idString(d.common?.roomId??d.roomId);
  if(type==='WebcastChatMessage')data.comment=String(d.comment??d.content??'').slice(0,200);

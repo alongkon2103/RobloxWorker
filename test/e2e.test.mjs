@@ -21,8 +21,8 @@ test('two mock Euler lives deliver joins, gifts, likes and follows to exact owne
   assert.equal(ga.event.effects[0].key,'rocket');assert.equal(ga.event.ownerRobloxId,'1');assert.equal(gb.event,null);
   await request(`/v1/sessions/${a.id}/ack`,a.token,{eventId:ga.event.eventId,receipt:ga.event.receipt,success:true});
   const socialUser={userId:'same-viewer',displayId:'viewer'};
-  const like={type:'WebcastLikeMessage',data:{common:{msgId:'likes'},user:socialUser,count:20,total:9000000}};
-  const follow={type:'WebcastSocialMessage',data:{common:{msgId:'follow',displayText:{key:'pm_main_follow_message_viewer'}},user:socialUser}};
+  const like={type:'WebcastLikeMessage',data:{common:{msgId:'likes'},user:socialUser,likeCount:20,totalLikeCount:9000000}};
+  const follow={type:'WebcastSocialMessage',data:{common:{msgId:'follow'},user:socialUser,action:'1',followCount:10015}};
   Socket.list[0].message({messages:[like,follow,like,follow]});
   await eventually(()=>store.public(store.get(a.id)).queueDepth===2);
   const boost=await request(`/v1/sessions/${a.id}/poll`,a.token,{});assert.deepEqual(boost.event.effects,[{key:'speed_boost',value:1,count:1}]);

@@ -24,7 +24,7 @@ test('Follow awards Fly; shares, unrelated social messages and duplicates cannot
   const a=await setup(store);await a.handle(follow('f'));const e=take(store,a.s.id);assert.equal(e.eventType,'follow');assert.deepEqual(e.effects,[{key:'fly',value:1,count:1}]);
   await a.handle(follow('f'));assert.equal(take(store,a.s.id),null);
   await a.handle(raw('WebcastSocialMessage','share',{common:{msgId:'share',displayText:{key:'pm_main_share_message'}}}));assert.equal(take(store,a.s.id),null);
-  await a.handle(raw('WebcastSocialMessage','unknown',{action:1}));assert.equal(take(store,a.s.id),null);
+  await a.handle(raw('WebcastSocialMessage','unknown',{action:'99'}));assert.equal(take(store,a.s.id),null);
  }finally{store.close();}
 });
 test('Heart progress is owner scoped and queue backpressure never consumes a reward',async()=>{
@@ -75,5 +75,22 @@ test('100 joined actors chatting and sending two heart waves drain before expiry
   }
   let delivered=0,polls=0;while(store.public(store.get(s.id)).queueDepth){const batch=store.pollBatch(s.id,32);assert.ok(batch.length>0&&batch.length<=32);for(const e of batch){assert.deepEqual(e.effects,[{key:'speed_boost',value:1,count:1}]);store.ack(s.id,e.eventId,e.receipt);delivered++;}now+=500;polls++;}
   assert.equal(delivered,200);assert.equal(polls,7);assert.equal(store.db.prepare("SELECT COUNT(*) AS n FROM events WHERE status='expired'").get().n,0);
+ }finally{store.close();}
+});
+
+test('real Euler v2 action-only follows award Fly once without using broadcaster followCount',async()=>{
+ const store=new Store(':memory:');try{
+  const a=await setup(store);
+  for(const [id,action]of [['wire-string','1'],['wire-number',1]]){
+   const message=raw('WebcastSocialMessage',id,{action,followCount:10015});
+   const normalized=compactMessage(message);assert.equal(normalized.data.socialType,'follow');
+   await a.handle(message);const e=take(store,a.s.id);assert.equal(e.eventType,'follow');
+   assert.deepEqual(e.effects,[{key:'fly',value:1,count:1}]);
+   await a.handle(message);assert.equal(take(store,a.s.id),null);
+  }
+  for(const [id,extra]of [['share',{action:'3'}],['unknown',{action:'99'}],
+   ['unfollow',{action:'1',displayType:'unfollow'}],['share-label',{action:'1',displayType:'share'}]]){
+   await a.handle(raw('WebcastSocialMessage',id,extra));assert.equal(take(store,a.s.id),null);
+  }
  }finally{store.close();}
 });

@@ -54,3 +54,9 @@ TikTok can omit per-viewer like notifications in large streams. Receiving every 
 Worker tests cover crowded chat, 100 actors and 200 heart rewards, fair multiple-owner batches, unresolved lookups, reset, backpressure, durable recovery, final combos, follow deduplication, and long-poll cancellation.
 
 The final Worker suite passes 121 tests. Native Studio fixtures cover per-actor Direct batches, ready effects during a yielding same-channel join, the two-owner idle-poll case, retry suffix release, fake-clock and concurrent HTTP budgets, nickname fallback, Speed Boost stacks/cap/deduplication, and the Tikkies negotiated/legacy protocols. Tikkies backend tests include actual PostgreSQL integration in three timezones and receipt authorization; its Desktop tests use a fake clock for sustained pacing and request limits.
+
+## Live verification follow-up
+
+A controlled follow during a real LIVE test arrived as Euler v2 `WebcastSocialMessage` with `action: "1"` and no display-text key. The previous detector incorrectly classified that message as unknown. Follow normalization now supports string and numeric action 1 while preserving explicit share/unfollow exclusions, exact event deduplication and one Fly award per event. The broadcaster's `followCount` is not a reward quantity. The HTTP integration fixture now uses this wire shape.
+
+During a separate 30-second raw provider observation, the tested viewer produced one like packet with `likeCount: 15`. Real game attributes and Worker acknowledgements confirmed accepted Speed Boost rewards, and other active racers reached speeds 30 and 32. This distinguishes intermittent upstream per-viewer like updates from an undelivered game queue. The rule remains 20 received likes per viewer; physical taps and room-wide total likes are not substituted for missing viewer data. A single boost lasts five seconds under the current Studio configuration.
