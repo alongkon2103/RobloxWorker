@@ -77,6 +77,7 @@ function Handlers.join(context)
 	local existing = arena.actors[context.actorKey]
 	if existing and existing.robloxId == robloxId and existing.model.Parent and existing.humanoid.Health > 0 then
 		existing.lastSeen = os.clock()
+		if type(context.tiktokUsername)=="string"and context.tiktokUsername~=""then existing.model:SetAttribute("ViewerUsername",context.tiktokUsername)end
         Presentation.nameplate(existing.model,context.tiktokDisplayName or context.tiktokUsername or existing.username,existing.username)
 		return true
 	end

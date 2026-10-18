@@ -17,8 +17,10 @@ end
 function Names.filter(value,ownerId,service,fallback)
  if type(ownerId)~="number"or ownerId<=0 then return "Viewer",false end
  service=service or game:GetService("TextService")
- local filtered=filteredName(value,ownerId,service)
- if not filtered and fallback~=value then filtered=filteredName(fallback,ownerId,service)end
+ local primary=value
+ if primary=="Viewer"and type(fallback)=="string"and fallback~=""then primary=nil end
+ local filtered=filteredName(primary,ownerId,service)
+ if not filtered and fallback~=primary then filtered=filteredName(fallback,ownerId,service)end
  if filtered then return filtered,true end
  return "Viewer",false
 end

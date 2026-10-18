@@ -54,9 +54,10 @@ function Presentation.nameplate(model, viewerName, avatarName)
  local head = model:FindFirstChild("Head")
  local hum = model:FindFirstChildOfClass("Humanoid")
  if not head or not hum then return end
+ local username=model:GetAttribute("ViewerUsername")
  local previous=nameInputs[model]
- if head:FindFirstChild("ViewerNameplate")and previous and previous.viewer==viewerName and previous.avatar==avatarName then return end
- nameInputs[model]={viewer=viewerName,avatar=avatarName}
+ if head:FindFirstChild("ViewerNameplate")and previous and previous.viewer==viewerName and previous.avatar==avatarName and previous.username==username then return end
+ nameInputs[model]={viewer=viewerName,avatar=avatarName,username=username}
  local palette, style = look(model, avatarName)
  hum.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
  local old = head:FindFirstChild("ViewerNameplate")
@@ -153,7 +154,7 @@ function Presentation.nameplate(model, viewerName, avatarName)
  tag.Parent = head
  task.defer(function()
   if not tag.Parent or not model.Parent then return end
-  local filtered,success=DisplayName.filter(viewerName,tonumber(model:GetAttribute("OwnerRobloxId")),nil,model:GetAttribute("ViewerUsername"))
+  local filtered,success=DisplayName.filter(viewerName,tonumber(model:GetAttribute("OwnerRobloxId")),nil,username)
   if tag.Parent and model.Parent then
    if not success then nameInputs[model]=nil end
    name.Text=filtered

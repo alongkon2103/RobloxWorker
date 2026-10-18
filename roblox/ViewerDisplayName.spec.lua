@@ -36,5 +36,13 @@ return function(Names)
   'Fallback must use the filter output, never the raw handle')
  value,ok=Names.filter('blocked_nickname',42,fallbackService,'other_blocked_handle')
  assert(not ok and value=='Viewer','A separately masked handle must remain hidden')
+ value,ok=Names.filter(nil,42,safeService,'runner_thai')
+ assert(ok and value=='runner_thai','Missing nicknames must use the TikTok username')
+ value,ok=Names.filter('   ',42,safeService,'runner_thai')
+ assert(ok and value=='runner_thai','Blank nicknames must use the TikTok username')
+ value,ok=Names.filter('Viewer',42,safeService,'runner_thai')
+ assert(ok and value=='runner_thai','Placeholder Viewer must not hide the TikTok username')
+ value,ok=Names.filter('Viewer',42,{FilterStringAsync=function()error('unavailable')end},'runner_thai')
+ assert(not ok and value=='Viewer','A placeholder must not bypass username filtering')
  return true
 end
