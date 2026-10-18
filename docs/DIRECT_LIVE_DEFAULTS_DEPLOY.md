@@ -17,7 +17,7 @@
 ## วิธีนำขึ้น VPS
 
 1. ใช้ Node24.11ขึ้นไปในสาย24 และหยุด Worker เดิมก่อนสำรองฐานข้อมูล SQLite ให้ครบทั้ง database/WAL/SHM หรือใช้ SQLite backup ที่ถูกต้อง
-2. ในโฟลเดอร์ repo RobloxWorker บน VPS ใช้ `git pull --ff-only` เพื่อดึงอัปเดต เก็บ `.env`, `data/`, DB และคีย์เดิมของ VPS ไว้ ห้ามลบทิ้ง หากใช้แพ็กเกจ zip แทน ให้แตกไฟล์ไปยังตำแหน่งโค้ดของ Worker ตามโครงสร้างใน zip
+2. แตก `bridge-api-direct-defaults-update.zip` ในโฟลเดอร์แม่ของ `bridge-api` ให้โค้ดใหม่แทนของเดิม เก็บ `.env`, `data/`, DB และคีย์เดิมของ VPS ไว้ ห้ามลบทิ้ง
 3. เพิ่ม3ตัวแปรจากไฟล์ `Tikkies-Worker.env` ใน zip ส่งต่อเดิมลง `.env` ของ VPS:
 
 ```dotenv
@@ -58,3 +58,18 @@ TIKKIES_DEFAULTS_READ_TOKEN=<คีย์อ่านจริงจากไฟ
 ## ขอบเขตที่ยังต้องทำตอนใช้งานจริง
 
 โค้ด Worker และแพตช์ Studio พร้อมแล้ว แต่ยังไม่ deploy VPS และยังไม่ Publish เกมจากงานนี้ ต้องทดสอบของขวัญ TikTok/Euler จริงหลัง deploy; การทดสอบอัตโนมัติและ GET publication ไม่ได้ใช้ของขวัญเงินจริง
+
+## Direct Live gift list
+
+Connect LIVE → Direct Live now shows **Gift events** (gift name → game event).
+Before connecting, it reads the published defaults. While connected, it reads
+that owner's actual session snapshot. Refresh reloads the list without reconnecting.
+The card is hidden for Tikkies, whose users configure their own mappings.
+
+Deploy the Worker update and publish the updated Roblox scripts together:
+`LiveBridge`, `Boot.server`, and `LiveSettings`. No new environment variables.
+SQLite adds name metadata columns automatically; existing mappings are preserved.
+Old sessions without stored names show `Gift #ID` until a provider name is observed;
+new sessions store the published names with their mapping version.
+The preview endpoint `/v1/direct/gift-mappings` requires the bridge credential;
+session mappings require that session's token. Credentials remain server-only.

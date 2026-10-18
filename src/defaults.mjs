@@ -3,12 +3,14 @@ import {GAME_EFFECT_KEYS} from './effect-keys.mjs';
 export function validatePublication(body,universeId){
  const invalid=()=>{throw new Fault('invalid_defaults_publication',502);};
  if(!body||body.schemaVersion!==1||body.universeId!==universeId||typeof body.version!=='string'||!body.version.trim()||body.version.length>256||typeof body.updatedAt!=='string'||!/^\d{4}-\d\d-\d\dT/.test(body.updatedAt)||!Number.isFinite(Date.parse(body.updatedAt))||!Array.isArray(body.mappings)||body.mappings.length>200)invalid();
- const giftMap={};const seen=new Set();
+ const giftMap={},giftNames={};const seen=new Set();
  for(const m of body.mappings){
   if(!m||typeof m.giftId!=='string'||!/^\d{1,20}$/.test(m.giftId)||seen.has(m.giftId)||!GAME_EFFECT_KEYS.includes(m.eventKey)||m.value!==1||m.enabled!==true)invalid();
+  if(m.giftName!==undefined&&(typeof m.giftName!=='string'||m.giftName.length>200))invalid();
+  if(m.giftName?.trim())giftNames[m.giftId]=m.giftName.trim();
   seen.add(m.giftId);giftMap[m.giftId]={key:m.eventKey,value:1};
  }
- return {giftMap,giftMapVersion:body.version,updatedAt:body.updatedAt};
+ return {giftMap,giftNames,giftMapVersion:body.version,updatedAt:body.updatedAt};
 }
 export class PublishedDefaults{
  constructor(store,config,{fetchFn=fetch,log=()=>{}}={}){Object.assign(this,{store,config,fetchFn,log});this.pending=null;this.stopped=false;this.blocked=store.defaultsDenied(config.universeId);}
@@ -34,7 +36,7 @@ export class PublishedDefaults{
   if(this.blocked)throw new Fault('defaults_access_denied',503);
   if(body.giftMap!==null&&body.giftMap!==undefined)return {universeId,giftMap:body.giftMap,giftMapVersion:null,giftMapSource:'override'};
   const cache=this.store.cachedDefaults(universeId);if(!cache)throw new Fault('defaults_not_ready',503);
-  return {universeId,giftMap:cache.giftMap,giftMapVersion:cache.giftMapVersion,giftMapSource:'tikkies-defaults'};
+  return {universeId,giftMap:cache.giftMap,giftNames:cache.giftNames,giftMapVersion:cache.giftMapVersion,giftMapSource:'tikkies-defaults'};
  }
  async start(){await this.refresh();if(!this.stopped){this.timer=setInterval(()=>void this.refresh(),this.config.refreshMs);this.timer.unref();}}
  async stop(){this.stopped=true;clearInterval(this.timer);await this.pending;}

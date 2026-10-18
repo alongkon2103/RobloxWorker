@@ -22,6 +22,7 @@ local remote=Instance.new("RemoteEvent") remote.Name="LiveSettingsControl" remot
 local cooldown,busy={},{}
 local operation={}
 local disconnectCooldown={}
+local giftRequests={}
 local legacy
 local function reply(player,errorCode)
  if player.Parent then
@@ -42,6 +43,14 @@ for _,player in Players:GetPlayers() do setup(player) end
 Players.PlayerAdded:Connect(setup)
 remote.OnServerEvent:Connect(function(player,action,username,provider)
  local now=os.clock()
+ if action=="get_gift_mappings" then
+  if type(username)~="number" or username~=username then return end
+  if now<(giftRequests[player] or 0) then remote:FireClient(player,"gift_mappings",username,nil,"rate_limited") return end
+  giftRequests[player]=now+2
+  local ok,rows,reason=pcall(receiver.giftMappings,receiver,player)
+  if player.Parent then remote:FireClient(player,"gift_mappings",username,ok and rows or nil,ok and reason or "network_error") end
+  return
+ end
  if action=="save_username" then
   -- Preferences coalesces the latest validated value into one delayed write.
   preferences:set(player,username)
@@ -80,7 +89,7 @@ remote.OnServerEvent:Connect(function(player,action,username,provider)
  end
 end)
 Players.PlayerRemoving:Connect(function(p)
- cooldown[p]=nil busy[p]=nil operation[p]=nil disconnectCooldown[p]=nil
+ cooldown[p]=nil busy[p]=nil operation[p]=nil disconnectCooldown[p]=nil giftRequests[p]=nil
  task.spawn(function() preferences:remove(p) end)
 end)
 game:BindToClose(function()

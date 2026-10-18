@@ -70,6 +70,27 @@ function Bridge:disconnect(player)
  end
  return true
 end
+function Bridge:ensureBridgeKey()
+ if not self.bridgeKey then
+  local ok,secret
+  if type(self.config.BridgeApiKey)=="string" and #self.config.BridgeApiKey>=32 then ok,secret=true,self.config.BridgeApiKey
+  else ok,secret=pcall(Http.GetSecret,Http,self.config.BridgeSecretName or "BRIDGE_API_KEY") end
+  if not ok then return false,"bridge_not_configured" end
+  self.bridgeKey=secret
+ end
+ return true
+end
+function Bridge:giftMappings(player)
+ local state=self.states[player]
+ if state and state.provider~="direct" then return nil,"direct_only" end
+ if state and (not state.id or not state.token) then return nil,"connecting" end
+ local ok,reason=self:ensureBridgeKey() if not ok then return nil,reason end
+ local path=state and "/v1/sessions/"..state.id or "/v1/direct/gift-mappings"
+ local data,code=self.request(path,"GET",nil,state and state.token or self.bridgeKey)
+ if self.states[player]~=state then return nil,"cancelled" end
+ if code~=200 or type(data)~="table" or type(data.giftMappings)~="table" then return nil,data and data.error or "network_error" end
+ return data.giftMappings
+end
 function Bridge:connect(player,username,provider,joinMode)
  if not self.alive or (provider~="direct" and provider~="tikkies") then return false,"invalid_provider" end
  if self.closing[player] and not self:closeDirect(player,self.closing[player]) then return false,"previous_connection_closing" end
@@ -80,13 +101,7 @@ function Bridge:connect(player,username,provider,joinMode)
  if joinMode~="at" and joinMode~="plain" and joinMode~="both" then return false,"invalid_join_mode" end
  local previous=self.states[player]
  if previous then return false,"disconnect_first" end
- if provider=="direct" and not self.bridgeKey then
-  local ok,secret
-  if type(self.config.BridgeApiKey)=="string" and #self.config.BridgeApiKey>=32 then ok,secret=true,self.config.BridgeApiKey
-  else ok,secret=pcall(Http.GetSecret,Http,self.config.BridgeSecretName or "BRIDGE_API_KEY") end
-  if not ok then self:publish(player,nil,"bridge_not_configured") return false,"bridge_not_configured" end
-  self.bridgeKey=secret
- end
+ if provider=="direct" then local ok,reason=self:ensureBridgeKey() if not ok then self:publish(player,nil,reason) return false,reason end end
  local s={provider=provider,username=username or "",status="connecting",joinMode=joinMode,desiredJoinMode=joinMode,
   done={},doneCount=0,nextStatus=0,legacyEpoch=Http:GenerateGUID(false),legacyActors={}}
  -- A disconnected dev arena must not retain its scope when LIVE takes over.

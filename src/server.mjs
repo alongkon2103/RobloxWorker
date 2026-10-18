@@ -79,12 +79,17 @@ export function createAPI(store,config,{log=()=>{},thumbnailFetch=fetch,defaults
     send(200,{results});return;
    }
    if(path==='/v1/overlay/state'&&method==='GET'){const state=overlays.read(token);if(state.snapshot)state.snapshot={...state.snapshot,racers:state.snapshot.racers.map(r=>({...r,avatarUrl:avatars.get(r.robloxId)}))};send(200,state);return;}
-   const view=s=>({...store.public(s),giftMap:store.effectiveGiftMap(s.id,config.giftMap)});
+   const view=s=>({...store.public(s),giftMap:store.effectiveGiftMap(s.id,config.giftMap),giftMappings:s.provider==='direct'?store.giftMappings(s.id,config.giftMap):[]});
+   if(path==='/v1/direct/gift-mappings'&&method==='GET'){
+    privileged(config.bridgeKey);rate('gift-preview',120);
+    const snapshot=defaults?defaults.snapshot({giftMap:null}):{giftMap:config.giftMap,giftNames:{}};
+    send(200,{giftMappings:Object.entries(snapshot.giftMap).map(([giftId,e])=>({giftId,giftName:snapshot.giftNames?.[giftId]||`Gift #${giftId}`,eventKey:e.key}))});return;
+   }
    if(path==='/v1/sessions'&&method==='POST'){
     privileged(config.bridgeKey);rate('create',120);const body=sessionBody(await readJSON(req));
     if(body.provider==='tikkies'&&!config.tikkiesEnabled)throw new Fault('provider_disabled',403);
     if(defaults&&body.provider==='direct'&&!body.universeId)throw new Fault('defaults_universe_required');
-    const created=store.create(defaults&&body.provider==='direct'?{...body,...defaults.snapshot(body)}:body);send(201,{...created,giftMap:store.effectiveGiftMap(created.id,config.giftMap)});return;
+    const created=store.create(defaults&&body.provider==='direct'?{...body,...defaults.snapshot(body)}:body);send(201,{...created,giftMap:store.effectiveGiftMap(created.id,config.giftMap),giftMappings:body.provider==='direct'?store.giftMappings(created.id,config.giftMap):[]});return;
    }
    if(path==='/v1/admin/sessions'&&method==='GET'){privileged(config.adminKey);send(200,{sessions:store.list().map(view)});return;}
    const serverMatch=path.match(/^\/v1\/servers\/([A-Za-z0-9._-]{1,128})\/(poll|ack)$/);

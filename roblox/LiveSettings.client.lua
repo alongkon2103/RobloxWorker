@@ -21,13 +21,42 @@ UI.text(joinCard,"Viewer join settings",UDim2.new(),UDim2.new(1,0,0,22),13,C.tex
 local modes={}
 for i,item in {{key="at",label="With @"},{key="plain",label="Without @"},{key="both",label="Both"}}do local b=UI.button(joinCard,item.label,UDim2.new((i-1)/3,4,0,27),UDim2.new(1/3,-8,0,36))b.Name=item.key modes[item.key]=b end
 local joinHelp=UI.text(joinCard,"",UDim2.fromOffset(4,67),UDim2.new(1,-8,0,30),12,C.text)
+local gifts=UI.card(page,96)gifts.Name="DirectGiftEvents"gifts.LayoutOrder=5
+UI.text(gifts,"Gift events",UDim2.new(),UDim2.new(1,-100,0,24),15,C.text,true)
+local reload=UI.button(gifts,"Refresh",UDim2.new(1,-94,0,0),UDim2.fromOffset(94,30))
+local giftHint=UI.text(gifts,"",UDim2.fromOffset(0,31),UDim2.new(1,0,0,32),11,C.muted)
+local giftList=Instance.new("Frame")giftList.Name="Mappings"giftList.BackgroundTransparency=1 giftList.Position=UDim2.fromOffset(0,68)giftList.Size=UDim2.new(1,0,0,0)giftList.Parent=gifts
+local labels={rainbow_cat="Speed V1",rocket="Rocket",naruto="Naruto",goku="Goku",asta="Asta",speed_boost="Speed Boost",fly="Fly",gojo="Gojo",shield="Shield",octopus="Octopus"}
+local giftRevision,nextGiftRequest,queuedGift=0,0,0
+local function requestGifts()
+ queuedGift+=1 local queued=queuedGift
+ if selected~="direct" then giftRevision+=1 return end
+ if os.clock()<nextGiftRequest then task.delay(nextGiftRequest-os.clock(),function()if queuedGift==queued then requestGifts()end end)return end
+ nextGiftRequest=os.clock()+2.3 giftRevision+=1
+ giftHint.Text="Loading gift events…"
+ remote:FireServer("get_gift_mappings",giftRevision)
+end
+reload.Activated:Connect(requestGifts)
+remote.OnClientEvent:Connect(function(action,ticket,rows,reason)
+ if action~="gift_mappings"or ticket~=giftRevision or selected~="direct"then return end
+ if type(rows)~="table"then giftHint.Text="Gift events unavailable. Press Refresh to try again."return end
+ giftHint.Text=#rows==0 and "No gifts are mapped yet."or player:GetAttribute("LiveEnabled")and "Active gift matches for this Direct Live connection."or "Default gift matches for your next Direct Live connection."
+ for _,child in giftList:GetChildren()do child:Destroy()end
+ for i,row in rows do
+  local line=Instance.new("Frame")line.BackgroundColor3=i%2==0 and C.raised or C.surface line.BorderSizePixel=0 line.Position=UDim2.fromOffset(0,(i-1)*44)line.Size=UDim2.new(1,0,0,40)line.Parent=giftList UI.corner(line,8)
+  local name=UI.text(line,row.giftName or ("Gift #"..row.giftId),UDim2.fromOffset(10,0),UDim2.new(.52,-10,1,0),12,C.text,true)name.RichText=false
+  UI.text(line,"→",UDim2.new(.52,0,0,0),UDim2.new(.08,0,1,0),16,C.muted)
+  UI.text(line,labels[row.eventKey]or row.eventKey,UDim2.new(.6,0,0,0),UDim2.new(.4,-8,1,0),12,C.mint,true)
+ end
+ giftList.Size=UDim2.new(1,0,0,#rows*44)gifts.Size=UDim2.new(1,0,0,math.max(96,76+#rows*44))
+end)
 local errors={defaults_universe_required="This game connection needs an update. Contact the map owner.",defaults_not_ready="Gift defaults are not ready. Publish them in Tikkies Admin first.",defaults_access_denied="Gift defaults could not be verified. Contact the map owner.",defaults_universe_forbidden="Gift defaults belong to a different game.",previous_connection_closing="Closing your previous connection. Please try again shortly.",invalid_username="Enter a TikTok username, not a link (2–24 characters).",owner_busy="Your previous connection is still closing. Please try again shortly.",live_busy="This TikTok account is connected in another room.",network_error="Connection interrupted. Trying again…",bridge_unauthorized="The game connection could not be verified. Contact the map owner.",bridge_not_configured="The map connection is not configured yet.",tikkies_unavailable="Tikkies is not available yet. Check your map connection.",tikkies_not_configured="The Tikkies map connection has not been set up.",tikkies_unauthorized="Tikkies could not verify this map connection.",tikkies_network_error="Could not reach Tikkies. Retrying…",tikkies_registration_failed="Preparing the Tikkies map connection…",reset_retrying="Preparing a fresh round. Please wait…",handler_failed="Could not connect. Please try again.",disconnect_first="Disconnect before changing your connection.",join_mode_update_failed="Could not update the join format. Please try again."}
 local states={disconnected="Not connected",connecting="Connecting…",queued="Waiting to connect…",live="Connected",offline="Waiting for your TikTok LIVE",retrying="Reconnecting…",error="Connection needs attention",resetting="Preparing the next round…"}
 local function refresh()
  local enabled=player:GetAttribute("LiveEnabled")==true local activeProvider=player:GetAttribute("LiveProvider") or "direct"local activeName=player:GetAttribute("LiveUsername") or ""local phase=player:GetAttribute("LiveStatus") or "disconnected"
  local same=enabled and activeProvider==selected and(selected=="tikkies" or activeName==input.Text:gsub("^@",""):lower())
  UI.select(direct,selected=="direct")UI.select(tikkies,selected=="tikkies",C.purple)
- username.Visible=selected=="direct"joinCard.Visible=selected=="direct"
+ username.Visible=selected=="direct"joinCard.Visible=selected=="direct" gifts.Visible=selected=="direct"
  tikkiesCard.Visible=selected=="tikkies"
  help.Text=selected=="direct"and "Read chat and gifts from your TikTok LIVE."or "Use the viewers and events you set up in Tikkies."
  local save=player:GetAttribute("UsernameSaveStatus")saveHint.Text=save=="saved"and "✓ Username saved"or save=="saving"and "Saving…"or save=="session"and "Remembered for this session"or "Saved automatically as you type"
@@ -41,7 +70,7 @@ local function refresh()
  connect:SetAttribute("Kind",same and "danger"or "primary")UI.enabled(connect,not pending and available)
 end
 for mode,b in modes do b.Activated:Connect(function()if pending then return end joinMode=mode remote:FireServer("set_join_mode",mode)refresh()end)end
-direct.Activated:Connect(function()if not pending then selected="direct"refresh()end end)tikkies.Activated:Connect(function()if not pending then selected="tikkies"refresh()end end)
+direct.Activated:Connect(function()if not pending then selected="direct"refresh()requestGifts()end end)tikkies.Activated:Connect(function()if not pending then selected="tikkies"refresh()requestGifts()end end)
 local typed,applying=false,false local revision,lastSent=0,nil
 local function saveName()
  local value=input.Text:match("^%s*(.-)%s*$"):gsub("^@",""):lower()
@@ -66,3 +95,7 @@ connect.Activated:Connect(function()
 end)
 for _,name in {"LiveEnabled","LiveProvider","LiveUsername","LiveStatus","LiveError","LiveQueueDepth","TikkiesAvailable","LiveTikkiesError","UsernameSaveStatus"}do player:GetAttributeChangedSignal(name):Connect(refresh)end
 remote.OnClientEvent:Connect(refresh)refresh()
+
+local scheduled=0
+for _,attribute in {"LiveEnabled","LiveProvider","LiveGiftMapVersion","LiveStatus"}do player:GetAttributeChangedSignal(attribute):Connect(function()scheduled+=1 local version=scheduled task.delay(2.2,function()if version==scheduled then requestGifts()end end)end)end
+task.delay(1,requestGifts)

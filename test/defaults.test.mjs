@@ -69,3 +69,16 @@ test('Direct translator emits all ten published effects with actual quantity',as
   }
  }finally{store.close();}
 });
+
+test('gift display names remain frozen with their session mapping',async()=>{
+ const store=new Store(':memory:');try{
+  let body=pub();const defaults=new PublishedDefaults(store,cfg,{fetchFn:async()=>new Response(JSON.stringify(body))});
+  await defaults.refresh();const session=store.create({ownerRobloxId:'41',jobId:'j',tiktokUsername:'names',...defaults.snapshot({giftMap:null})});
+  assert.deepEqual(store.giftMappings(session.id),[{giftId:'99',giftName:'Gift',eventKey:'rocket'}]);
+  body=pub('next',[{giftId:'99',giftName:'New gift',eventKey:'shield',value:1,enabled:true}]);await defaults.refresh();
+  assert.equal(defaults.snapshot({giftMap:null}).giftNames['99'],'New gift');
+  assert.deepEqual(store.giftMappings(session.id),[{giftId:'99',giftName:'Gift',eventKey:'rocket'}]);
+  store.setGiftMap(session.id,{123:{key:'fly',value:1}});
+  assert.deepEqual(store.giftMappings(session.id),[{giftId:'123',giftName:'Gift #123',eventKey:'fly'}]);
+ }finally{store.close();}
+});
