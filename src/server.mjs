@@ -12,7 +12,7 @@ const eventID=x=>string(x,/^[A-Za-z0-9:._-]{1,200}$/,'event_id');
 function sessionBody(body){
  const tiktokUsername=string(typeof body.tiktokUsername==='string'?body.tiktokUsername.trim().replace(/^@/,'').toLowerCase():null,/^[a-z0-9._]{2,24}$/,'tiktok_username');
  const provider=body.provider??'direct';if(!['direct','tikkies'].includes(provider))throw new Fault('invalid_provider');
- const joinMode=body.joinMode??'at';if(!['at','plain','both'].includes(joinMode))throw new Fault('invalid_join_mode');
+ const joinMode=body.joinMode??'both';if(!['at','plain','both'].includes(joinMode))throw new Fault('invalid_join_mode');
  return {universeId:body.universeId===undefined?'':positiveID(body.universeId,'universe_id'),joinMode,ownerRobloxId:positiveID(body.ownerRobloxId,'owner_id'),jobId:job(body.jobId),tiktokUsername,provider,giftMap:body.giftMap===undefined?null:validateGiftMap(body.giftMap)};
 }
 async function readJSON(req,maxBytes=65536){

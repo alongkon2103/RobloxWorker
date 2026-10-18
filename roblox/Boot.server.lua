@@ -35,7 +35,7 @@ local function setup(player)
  player:SetAttribute("LiveTikkiesError",secretOk and "" or "tikkies_not_configured")
  task.spawn(function()
   preferences:load(player)
-  if player.Parent then receiver:setJoinMode(player,player:GetAttribute("PreferredJoinMode") or "at") end
+  if player.Parent then receiver:setJoinMode(player,player:GetAttribute("PreferredJoinMode") or "both") end
  end)
 end
 for _,player in Players:GetPlayers() do setup(player) end
@@ -70,7 +70,7 @@ remote.OnServerEvent:Connect(function(player,action,username,provider)
    receiver:reset(player)
   else
    if provider=="direct" then preferences:set(player,username) end
-   local accepted,reason=receiver:connect(player,username,provider,player:GetAttribute("PreferredJoinMode") or "at")
+   local accepted,reason=receiver:connect(player,username,provider,player:GetAttribute("PreferredJoinMode") or "both")
    if not accepted then return reason end
   end
  end)

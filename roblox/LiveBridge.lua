@@ -76,7 +76,7 @@ function Bridge:connect(player,username,provider,joinMode)
  username=normalize(username)
  if provider=="direct" and not username then return false,"invalid_username" end
  if provider=="tikkies" and not self.config.TikkiesEnabled then return false,"tikkies_unavailable" end
- joinMode=joinMode or "at"
+ joinMode=joinMode or "both"
  if joinMode~="at" and joinMode~="plain" and joinMode~="both" then return false,"invalid_join_mode" end
  local previous=self.states[player]
  if previous then return false,"disconnect_first" end
@@ -110,7 +110,7 @@ function Bridge:connect(player,username,provider,joinMode)
   return false,data and data.error or "network_error"
  end
  s.id=data.id s.token=data.token s.runId=data.runId s.generation=data.generation
- s.joinMode=data.joinMode or "at"
+ s.joinMode=data.joinMode or "both"
  s.giftMapVersion=data.giftMapVersion s.giftMapSource=data.giftMapSource
  s.status=data.status or "queued" self:publish(player,s)
  return true
@@ -227,10 +227,10 @@ function Bridge:step()
     s.modeBusy=true local wanted=s.desiredJoinMode
     self.spawn(function()
      local data,code=self.request("/v1/sessions/"..s.id.."/join-mode","POST",{joinMode=wanted},s.token)
-     s.modeBusy=false s.nextModeUpdate=self.now()+10
+     s.modeBusy=false
      if self.states[player]~=s then return end
-     if code==200 and data and data.joinMode==wanted then s.joinMode=wanted s.joinModeError=nil
-     else s.joinModeError="join_mode_update_failed" end
+     if code==200 and data and data.joinMode==wanted then s.joinMode=wanted s.joinModeError=nil s.nextModeUpdate=0
+     else s.joinModeError="join_mode_update_failed" s.nextModeUpdate=self.now()+10 end
      self:publish(player,s)
     end)
    end

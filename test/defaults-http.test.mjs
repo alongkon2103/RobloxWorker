@@ -9,7 +9,7 @@ test('HTTP direct defaults snapshot, override and universe isolation; all ten ke
   const body={ownerRobloxId:'1',jobId:'job',tiktokUsername:'alice',universeId:'10771081714'};
   assert.equal((await req('/v1/sessions',cfg.bridgeKey,{...body,universeId:undefined})).status,400);
   assert.equal((await req('/v1/sessions',cfg.bridgeKey,body)).status,503);await defaults.refresh();
-  const a=await req('/v1/sessions',cfg.bridgeKey,body);assert.equal(a.status,201);assert.equal(a.body.giftMapVersion,'v1');assert.equal(Object.keys(a.body.giftMap).length,10);
+  const a=await req('/v1/sessions',cfg.bridgeKey,body);assert.equal(a.status,201);assert.equal(a.body.giftMapVersion,'v1');assert.equal(a.body.joinMode,'both');assert.equal(Object.keys(a.body.giftMap).length,10);
   assert.equal((await req('/v1/sessions',cfg.bridgeKey,{...body,ownerRobloxId:'2',tiktokUsername:'bob',universeId:'2'})).status,403);
   const custom=await req('/v1/sessions',cfg.bridgeKey,{...body,ownerRobloxId:'2',tiktokUsername:'bob',giftMap:{}});assert.deepEqual(custom.body.giftMap,{});assert.equal(custom.body.giftMapSource,'override');
   const t=(await req('/v1/sessions',cfg.bridgeKey,{...body,ownerRobloxId:'3',tiktokUsername:'carol',provider:'tikkies'})).body;

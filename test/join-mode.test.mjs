@@ -26,7 +26,22 @@ test('existing database migrates join mode without losing sessions',async()=>{
   let store=new Store(file);const created=store.create({ownerRobloxId:'999',jobId:'job',tiktokUsername:'existing'});store.close();
   const old=new DatabaseSync(file);old.exec('ALTER TABLE sessions DROP COLUMN join_mode');old.close();
   store=new Store(file);assert.equal(store.authenticate(created.id,created.token).owner_id,'999');
-  assert.equal(store.public(store.get(created.id)).joinMode,'at');store.setJoinMode(created.id,'both');store.close();
+  assert.equal(store.public(store.get(created.id)).joinMode,'both');store.setJoinMode(created.id,'both');store.close();
   store=new Store(file);assert.equal(store.public(store.get(created.id)).joinMode,'both');store.close();
  }finally{rmSync(dir,{recursive:true,force:true});}
+});
+
+test('new sessions default to both and changing join mode keeps the same live session and run',async()=>{
+ const store=new Store(':memory:');try{
+  const s=store.create({ownerRobloxId:'1',jobId:'j',tiktokUsername:'streamer'});assert.equal(s.joinMode,'both');
+  const translate=new EventTranslator(store,{resolve:async name=>({id:123,name}),giftMap:{}});
+  const chat=(id,text)=>compactMessage({type:'WebcastChatMessage',data:{msgId:id,user:{userId:id},comment:text}});
+  assert.equal(await translate.handle(s.id,1,chat('one','Runner_Name')),true);
+  store.status(s.id,'live');store.setJoinMode(s.id,'at');
+  assert.equal(store.get(s.id).run_id,s.runId);assert.equal(store.get(s.id).status,'live');
+  assert.equal(await translate.handle(s.id,1,chat('two','Runner_Name')),false);
+  assert.equal(await translate.handle(s.id,1,chat('three','@Runner_Name')),true);
+  store.setJoinMode(s.id,'plain');assert.equal(await translate.handle(s.id,1,chat('four','Runner_Name')),true);
+  assert.equal(await translate.handle(s.id,1,chat('five','@Runner_Name')),false);
+ }finally{store.close();}
 });

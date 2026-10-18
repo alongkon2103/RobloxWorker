@@ -1,7 +1,7 @@
 local Players=game:GetService("Players")local RS=game:GetService("ReplicatedStorage")
 local player=Players.LocalPlayer local remote=RS:WaitForChild("LiveSettingsControl")
 local UI=require(RS:WaitForChild("StreamerUI"))local C=UI.colors local page=UI.page("Live")
-local selected=player:GetAttribute("LiveProvider") or "direct"local joinMode=player:GetAttribute("PreferredJoinMode") or "at"local pending=false
+local selected=player:GetAttribute("LiveProvider") or "direct"local joinMode=player:GetAttribute("PreferredJoinMode") or "both"local pending=false
 local provider=UI.card(page,60)provider.Name="ProviderCard" provider.LayoutOrder=1
 local direct=UI.button(provider,"Direct Live",UDim2.fromOffset(0,0),UDim2.new(.5,-6,0,40),"primary")direct.Name="Direct"
 local tikkies=UI.button(provider,"Tikkies",UDim2.new(.5,6,0,0),UDim2.new(.5,-6,0,40))tikkies.Name="Tikkies"
@@ -52,7 +52,7 @@ input:GetPropertyChangedSignal("Text"):Connect(function()
  if not applying then typed=true revision+=1 local current=revision task.delay(1.3,function()if revision==current then saveName()end end)end refresh()
 end)input.FocusLost:Connect(saveName)
 player:GetAttributeChangedSignal("PreferredTikTokUsername"):Connect(function()if not typed then applying=true input.Text=player:GetAttribute("PreferredTikTokUsername")or ""applying=false end refresh()end)
-player:GetAttributeChangedSignal("PreferredJoinMode"):Connect(function()joinMode=player:GetAttribute("PreferredJoinMode")or "at"refresh()end)
+player:GetAttributeChangedSignal("PreferredJoinMode"):Connect(function()joinMode=player:GetAttribute("PreferredJoinMode")or "both"refresh()end)
 connect.Activated:Connect(function()
  if pending or not connect.Active then return end
  local name=input.Text:match("^%s*(.-)%s*$"):gsub("^@",""):lower()

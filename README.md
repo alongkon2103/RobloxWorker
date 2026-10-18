@@ -238,3 +238,5 @@ Direct session ใหม่ต้องส่ง universeId ที่ตรง�
 API public session มี `universeId`, `giftMapVersion`, `giftMapSource` ส่วนsecretไม่ถูกคืน การ syncไม่ต้องเปิดโปรแกรม Tikkies และไม่ทำให้ Worker รับของขวัญผ่าน Tikkies ซ้ำกับ Euler
 
 ดูคู่มือติดตั้งฉบับเต็ม `docs/DIRECT_LIVE_DEFAULTS_DEPLOY.md` ในชุดส่งต่อ และเก็บ DBเดิมไว้เพื่อรักษาทั้งcache,session snapshotsและreceiptกันของขวัญซ้ำ
+
+Viewer join settings default to Both for new/unconfigured preferences and sessions. Existing saved selections remain unchanged. While Direct is connected, switching With @ / Without @ / Both updates the same live session without reconnecting.
