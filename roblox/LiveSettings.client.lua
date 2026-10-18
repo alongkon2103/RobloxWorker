@@ -22,7 +22,7 @@ local modes={}
 for i,item in {{key="at",label="With @"},{key="plain",label="Without @"},{key="both",label="Both"}}do local b=UI.button(joinCard,item.label,UDim2.new((i-1)/3,4,0,27),UDim2.new(1/3,-8,0,36))b.Name=item.key modes[item.key]=b end
 local joinHelp=UI.text(joinCard,"",UDim2.fromOffset(4,67),UDim2.new(1,-8,0,30),12,C.text)
 local gifts=UI.card(page,96)gifts.Name="DirectGiftEvents"gifts.LayoutOrder=5
-UI.text(gifts,"Gift events",UDim2.new(),UDim2.new(1,-100,0,24),15,C.text,true)
+UI.text(gifts,"LIVE events",UDim2.new(),UDim2.new(1,-100,0,24),15,C.text,true)
 local reload=UI.button(gifts,"Refresh",UDim2.new(1,-94,0,0),UDim2.fromOffset(94,30))
 local giftHint=UI.text(gifts,"",UDim2.fromOffset(0,31),UDim2.new(1,0,0,32),11,C.muted)
 local giftList=Instance.new("Frame")giftList.Name="Mappings"giftList.BackgroundTransparency=1 giftList.Position=UDim2.fromOffset(0,68)giftList.Size=UDim2.new(1,0,0,0)giftList.Parent=gifts
@@ -44,22 +44,34 @@ remote.OnClientEvent:Connect(function(action,ticket,rows,reason)
   local reasons={worker_update_required="Update the Worker on your VPS, then press Refresh.",connecting="Connecting… Gift events will load when ready.",bridge_not_configured="The game connection is not configured yet.",unauthorized="The game could not verify the Worker connection.",defaults_not_ready="Publish gift defaults in Tikkies Admin first.",defaults_access_denied="The Worker could not verify gift defaults.",direct_only="Switch your active connection to Direct Live to see gift events."}
   giftHint.Text=reasons[reason]or "Gift events unavailable. Press Refresh to try again."return
  end
- giftHint.Text=#rows==0 and "No gifts are mapped yet."or player:GetAttribute("LiveEnabled")and "Active gift matches for this Direct Live connection."or "Default gift matches for your next Direct Live connection."
+ giftHint.Text=#rows==0 and "No gifts are mapped yet."or player:GetAttribute("LiveEnabled")and "Active LIVE events. Likes count separately for each viewer."or "Default LIVE events. Likes count separately for each viewer."
  for _,child in giftList:GetChildren()do child:Destroy()end
- for i,row in rows do
-  local line=Instance.new("Frame")line.BackgroundColor3=i%2==0 and C.raised or C.surface line.BorderSizePixel=0 line.Position=UDim2.fromOffset(0,(i-1)*56)line.Size=UDim2.new(1,0,0,52)line.Parent=giftList UI.corner(line,8)
-  local icon=Instance.new("ImageLabel")icon.Name="GiftImage"icon.BackgroundTransparency=1 icon.Position=UDim2.fromOffset(8,4)icon.Size=UDim2.fromOffset(44,44)icon.ScaleType=Enum.ScaleType.Fit icon.Parent=line
-  local fallback=UI.text(line,"🎁",UDim2.fromOffset(8,4),UDim2.fromOffset(44,44),24,C.muted)fallback.Name="GiftImageFallback"fallback.TextXAlignment=Enum.TextXAlignment.Center
-  local asset=giftIcons[tostring(row.giftId)]
-  if type(asset)=="string"and asset:match("^rbxassetid://%d+$")then
-   icon.Image=asset
-   fallback.Visible=false
+ local records={}
+ local ordering={rocket=1,rainbow_cat=2,naruto=3,goku=4,asta=5,speed_boost=6,fly=7,gojo=8,shield=9,octopus=10}
+ for _,row in rows do table.insert(records,{sources={row},order=ordering[row.eventKey]or 99})end
+ table.sort(records,function(a,b)return a.order<b.order end)
+ local y=0
+ for i,record in records do
+  local height=#record.sources>1 and 64 or 52
+  local line=Instance.new("Frame")line.BackgroundColor3=i%2==0 and C.raised or C.surface line.BorderSizePixel=0 line.Position=UDim2.fromOffset(0,y)line.Size=UDim2.new(1,0,0,height)line.Parent=giftList UI.corner(line,8)
+  local names,effectNames,seenEffects={},{},{}
+  for j,row in record.sources do
+   local key=(row.sourceType=="like"or row.sourceType=="follow")and row.sourceType or tostring(row.giftId)
+   local x=8+(j-1)*44
+   local icon=Instance.new("ImageLabel")icon.Name="GiftImage"icon.BackgroundTransparency=1 icon.Position=UDim2.fromOffset(x,(height-40)/2)icon.Size=UDim2.fromOffset(40,40)icon.ScaleType=Enum.ScaleType.Fit icon.Parent=line
+   local fallback=UI.text(line,"🎁",icon.Position,icon.Size,24,C.muted)fallback.Name="GiftImageFallback"fallback.TextXAlignment=Enum.TextXAlignment.Center
+   local asset=giftIcons[key]
+   if type(asset)=="string"and asset:match("^rbxassetid://%d+$")then icon.Image=asset fallback.Visible=false end
+   table.insert(names,row.sourceType=="like"and tostring(row.likeCount or 20).." Likes"or row.giftName or("Gift #"..tostring(row.giftId)))
+   if not seenEffects[row.eventKey]then seenEffects[row.eventKey]=true table.insert(effectNames,labels[row.eventKey]or row.eventKey)end
   end
-  local name=UI.text(line,row.giftName or ("Gift #"..row.giftId),UDim2.fromOffset(62,0),UDim2.new(.52,-62,1,0),12,C.text,true)name.RichText=false
+  local nameX=14+#record.sources*44
+  local name=UI.text(line,table.concat(names," / "),UDim2.fromOffset(nameX,0),UDim2.new(.52,-nameX,1,0),12,C.text,true)name.RichText=false
   UI.text(line,"→",UDim2.new(.52,0,0,0),UDim2.new(.08,0,1,0),16,C.muted)
-  UI.text(line,labels[row.eventKey]or row.eventKey,UDim2.new(.6,0,0,0),UDim2.new(.4,-8,1,0),12,C.mint,true)
+  UI.text(line,table.concat(effectNames," / "),UDim2.new(.6,0,0,0),UDim2.new(.4,-8,1,0),12,C.mint,true)
+  y+=height+4
  end
- giftList.Size=UDim2.new(1,0,0,#rows*56)gifts.Size=UDim2.new(1,0,0,math.max(96,76+#rows*56))
+ giftList.Size=UDim2.new(1,0,0,y)gifts.Size=UDim2.new(1,0,0,math.max(96,76+y))
 end)
 local errors={defaults_universe_required="This game connection needs an update. Contact the map owner.",defaults_not_ready="Gift defaults are not ready. Publish them in Tikkies Admin first.",defaults_access_denied="Gift defaults could not be verified. Contact the map owner.",defaults_universe_forbidden="Gift defaults belong to a different game.",previous_connection_closing="Closing your previous connection. Please try again shortly.",invalid_username="Enter a TikTok username, not a link (2–24 characters).",owner_busy="Your previous connection is still closing. Please try again shortly.",live_busy="This TikTok account is connected in another room.",network_error="Connection interrupted. Trying again…",bridge_unauthorized="The game connection could not be verified. Contact the map owner.",bridge_not_configured="The map connection is not configured yet.",tikkies_unavailable="Tikkies is not available yet. Check your map connection.",tikkies_not_configured="The Tikkies map connection has not been set up.",tikkies_unauthorized="Tikkies could not verify this map connection.",tikkies_network_error="Could not reach Tikkies. Retrying…",tikkies_registration_failed="Preparing the Tikkies map connection…",reset_retrying="Preparing a fresh round. Please wait…",handler_failed="Could not connect. Please try again.",disconnect_first="Disconnect before changing your connection.",join_mode_update_failed="Could not update the join format. Please try again."}
 local states={disconnected="Not connected",connecting="Connecting…",queued="Waiting to connect…",live="Connected",offline="Waiting for your TikTok LIVE",retrying="Reconnecting…",error="Connection needs attention",resetting="Preparing the next round…"}
@@ -69,12 +81,12 @@ local function refresh()
  UI.select(direct,selected=="direct")UI.select(tikkies,selected=="tikkies",C.purple)
  username.Visible=selected=="direct"joinCard.Visible=selected=="direct" gifts.Visible=selected=="direct"
  tikkiesCard.Visible=selected=="tikkies"
- help.Text=selected=="direct"and "Read chat and gifts from your TikTok LIVE."or "Use the viewers and events you set up in Tikkies."
+ help.Text=selected=="direct"and "Read chat, gifts, likes and follows from your TikTok LIVE."or "Use the viewers and events you set up in Tikkies."
  local save=player:GetAttribute("UsernameSaveStatus")saveHint.Text=save=="saved"and "✓ Username saved"or save=="saving"and "Saving…"or save=="session"and "Remembered for this session"or "Saved automatically as you type"
  for key,b in modes do UI.select(b,key==joinMode)UI.enabled(b,not pending)UI.select(b,key==joinMode)end
  joinHelp.Text=joinMode=="at"and "Viewers type @RobloxUsername in chat."or joinMode=="plain"and "Viewers type RobloxUsername directly in chat."or "Viewers can type @RobloxUsername or RobloxUsername."
  status.Text=(states[phase]or phase)..(enabled and "  ·  "..(activeProvider=="direct"and "Direct Live"or "Tikkies")or "")status.TextColor3=phase=="live"and C.mint or phase=="error"and C.red or C.text
- local errorCode=player:GetAttribute("LiveError")detail.Text=errors[errorCode]or(enabled and "New viewers and gifts will appear in your race automatically."or (selected=="direct"and "Enter your TikTok name above, then connect."or "Ready to use your Tikkies viewer and gift settings."))
+ local errorCode=player:GetAttribute("LiveError")detail.Text=errors[errorCode]or(enabled and (activeProvider=="direct"and "Viewers join with their Roblox username. Gifts, likes and follows power their racer."or "New viewers and gifts will appear in your race automatically.")or (selected=="direct"and "Enter your TikTok name above, then connect."or "Ready to use your Tikkies viewer and gift settings."))
  local available=selected~="tikkies"or player:GetAttribute("TikkiesAvailable")==true
  if not available then detail.Text=errors[player:GetAttribute("LiveTikkiesError")]or errors.tikkies_unavailable end
  connect.Text=pending and "Please wait…"or same and "Disconnect"or enabled and "Switch connection"or "Connect LIVE"

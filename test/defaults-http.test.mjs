@@ -10,7 +10,7 @@ test('HTTP direct defaults snapshot, override and universe isolation; all ten ke
   assert.equal((await req('/v1/sessions',cfg.bridgeKey,{...body,universeId:undefined})).status,400);
   assert.equal((await req('/v1/sessions',cfg.bridgeKey,body)).status,503);await defaults.refresh();
   assert.equal((await req('/v1/direct/gift-mappings','wrong')).status,401);
-  const preview=await req('/v1/direct/gift-mappings',cfg.bridgeKey);assert.equal(preview.body.giftMappings[0].giftName,'Gift 0');
+  const preview=await req('/v1/direct/gift-mappings',cfg.bridgeKey);assert.equal(preview.body.giftMappings[0].giftName,'Gift 0');assert.equal(preview.body.giftMappings.find(r=>r.sourceType==='like').likeCount,20);assert.equal(preview.body.giftMappings.find(r=>r.sourceType==='follow').eventKey,'fly');
   const a=await req('/v1/sessions',cfg.bridgeKey,body);assert.equal(a.status,201);assert.equal(a.body.giftMapVersion,'v1');assert.equal(a.body.joinMode,'both');assert.equal(Object.keys(a.body.giftMap).length,10);
   assert.equal((await req('/v1/sessions',cfg.bridgeKey,{...body,ownerRobloxId:'2',tiktokUsername:'bob',universeId:'2'})).status,403);
   const custom=await req('/v1/sessions',cfg.bridgeKey,{...body,ownerRobloxId:'2',tiktokUsername:'bob',giftMap:{}});assert.deepEqual(custom.body.giftMap,{});assert.equal(custom.body.giftMapSource,'override');

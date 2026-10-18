@@ -1,3 +1,4 @@
+import {LIKES_PER_BOOST} from './direct-rules.mjs';
 import {DatabaseSync} from 'node:sqlite';
 import {createHash,randomBytes,randomUUID,timingSafeEqual} from 'node:crypto';
 import {mkdirSync} from 'node:fs';
@@ -26,6 +27,8 @@ export class Store {
   this.db.exec(`CREATE TABLE IF NOT EXISTS defaults_access(universe_id TEXT PRIMARY KEY,denied INTEGER NOT NULL);
    CREATE TABLE IF NOT EXISTS published_gift_defaults(universe_id TEXT PRIMARY KEY,version TEXT NOT NULL,gift_map TEXT NOT NULL,updated_at TEXT NOT NULL,fetched_at INTEGER NOT NULL);
    CREATE TABLE IF NOT EXISTS gift_receipts(universe_id TEXT NOT NULL,streamer TEXT NOT NULL,source_hash TEXT NOT NULL,seen_at INTEGER NOT NULL,PRIMARY KEY(universe_id,streamer,source_hash));`);
+  this.db.exec(`CREATE TABLE IF NOT EXISTS direct_social_progress(session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,generation INTEGER NOT NULL,actor_key TEXT NOT NULL,likes INTEGER NOT NULL,PRIMARY KEY(session_id,generation,actor_key));
+   CREATE TABLE IF NOT EXISTS direct_social_receipts(universe_id TEXT NOT NULL,streamer TEXT NOT NULL,source_hash TEXT NOT NULL,seen_at INTEGER NOT NULL,PRIMARY KEY(universe_id,streamer,source_hash));`);
   const columns=new Set(this.db.prepare('PRAGMA table_info(sessions)').all().map(c=>c.name));
   if(!this.db.prepare('PRAGMA table_info(published_gift_defaults)').all().some(c=>c.name==='gift_names'))this.db.exec("ALTER TABLE published_gift_defaults ADD COLUMN gift_names TEXT NOT NULL DEFAULT '{}'");
   for(const [name,sql]of [['gift_names',"TEXT NOT NULL DEFAULT '{}'"],['universe_id',"TEXT NOT NULL DEFAULT ''"],['gift_map_version','TEXT'],['gift_map_source','TEXT']])if(!columns.has(name))this.db.exec(`ALTER TABLE sessions ADD COLUMN ${name} ${sql}`);
@@ -49,8 +52,8 @@ export class Store {
  setJoinMode(id,mode){if(!['at','plain','both'].includes(mode))throw new Fault('invalid_join_mode');this.heartbeat(id);this.db.prepare('UPDATE sessions SET join_mode=? WHERE id=?').run(mode,id);return this.public(this.get(id));}
  authenticate(id,token){const s=this.get(id);if(typeof token!=='string'||!constantEqual(s.token_hash,digest(token)))throw new Fault('unauthorized',401);return s;}
  heartbeat(id){if(terminal.includes(this.get(id).status))throw new Fault('session_inactive',410);this.db.prepare('UPDATE sessions SET seen_at=? WHERE id=?').run(this.now(),id);return this.public(this.get(id));}
- reset(id,requestId=randomUUID()){return this.tx(()=>{const s=this.get(id);if(terminal.includes(s.status))throw new Fault('session_inactive',410);const saved=this.db.prepare('SELECT response FROM controls WHERE session_id=? AND request_id=?').get(id,requestId);if(saved)return JSON.parse(saved.response);this.db.prepare('UPDATE sessions SET generation=generation+1,run_id=?,seen_at=? WHERE id=?').run(randomUUID(),this.now(),id);for(const table of ['events','actors','sources','inbox'])this.db.prepare(`DELETE FROM ${table} WHERE session_id=?`).run(id);const response=this.public(this.get(id));this.db.prepare('INSERT INTO controls VALUES(?,?,?,?)').run(id,requestId,JSON.stringify(response),this.now());this.db.prepare('DELETE FROM controls WHERE session_id=? AND request_id NOT IN (SELECT request_id FROM controls WHERE session_id=? ORDER BY created_at DESC LIMIT 128)').run(id,id);return response;});}
- stop(id,status='closed'){this.db.prepare('UPDATE sessions SET status=? WHERE id=?').run(status,id);for(const table of ['events','actors','sources','inbox'])this.db.prepare(`DELETE FROM ${table} WHERE session_id=?`).run(id);}
+ reset(id,requestId=randomUUID()){return this.tx(()=>{const s=this.get(id);if(terminal.includes(s.status))throw new Fault('session_inactive',410);const saved=this.db.prepare('SELECT response FROM controls WHERE session_id=? AND request_id=?').get(id,requestId);if(saved)return JSON.parse(saved.response);this.db.prepare('UPDATE sessions SET generation=generation+1,run_id=?,seen_at=? WHERE id=?').run(randomUUID(),this.now(),id);for(const table of ['events','actors','sources','inbox','direct_social_progress'])this.db.prepare(`DELETE FROM ${table} WHERE session_id=?`).run(id);const response=this.public(this.get(id));this.db.prepare('INSERT INTO controls VALUES(?,?,?,?)').run(id,requestId,JSON.stringify(response),this.now());this.db.prepare('DELETE FROM controls WHERE session_id=? AND request_id NOT IN (SELECT request_id FROM controls WHERE session_id=? ORDER BY created_at DESC LIMIT 128)').run(id,id);return response;});}
+ stop(id,status='closed'){this.db.prepare('UPDATE sessions SET status=? WHERE id=?').run(status,id);for(const table of ['events','actors','sources','inbox','direct_social_progress'])this.db.prepare(`DELETE FROM ${table} WHERE session_id=?`).run(id);}
  expire(){const stale=this.db.prepare("SELECT id FROM sessions WHERE status NOT IN ('closed','expired') AND seen_at<?").all(this.now()-this.sessionTTL);for(const s of stale)this.stop(s.id,'expired');return stale;}
  list(){return this.db.prepare("SELECT * FROM sessions WHERE status NOT IN ('closed','expired') ORDER BY created_at,rowid").all();}
  candidates(){return this.db.prepare("SELECT * FROM sessions WHERE provider='direct' AND status IN ('queued','retrying','offline') AND retry_at<=? ORDER BY retry_at,created_at,rowid").all(this.now());}
@@ -59,7 +62,9 @@ export class Store {
  actor(id,generation,key){const a=this.db.prepare('SELECT payload FROM actors WHERE session_id=? AND generation=? AND actor_key=?').get(id,generation,key);return a?JSON.parse(a.payload):null;}
  seen(id,generation,source){return !!this.db.prepare('SELECT 1 FROM sources WHERE session_id=? AND generation=? AND source_id=?').get(id,generation,source);}
  enqueue(id,generation,eventId,payload,{actor,sourceId=eventId,giftIdentity=null}={}){
-  return this.tx(()=>{
+  return this.tx(()=>this.enqueueInside(id,generation,eventId,payload,{actor,sourceId,giftIdentity}));
+ }
+ enqueueInside(id,generation,eventId,payload,{actor,sourceId=eventId,giftIdentity=null}={}){
    const s=this.get(id);if(terminal.includes(s.status)||s.generation!==generation)return false;
    if(this.seen(id,generation,sourceId))return false;
    if(giftIdentity&&this.db.prepare('SELECT 1 FROM gift_receipts WHERE universe_id=? AND streamer=? AND source_hash=?').get(s.universe_id,s.tiktok,giftIdentity))return false;
@@ -72,8 +77,19 @@ export class Store {
    if(actor)this.db.prepare('INSERT INTO actors(session_id,generation,actor_key,payload) VALUES(?,?,?,?) ON CONFLICT DO UPDATE SET payload=excluded.payload').run(id,generation,actor.actorKey,JSON.stringify(actor));
    this.db.prepare('INSERT INTO sources VALUES(?,?,?,?)').run(id,generation,sourceId,this.now());
    if(giftIdentity)this.db.prepare('INSERT INTO gift_receipts VALUES(?,?,?,?)').run(s.universe_id,s.tiktok,giftIdentity,this.now());return true;
-  });
  }
+ socialEvent(id,generation,actor,sourceId,identity,type,count){return this.tx(()=>{
+  const s=this.get(id);if(s.provider!=='direct'||terminal.includes(s.status)||s.generation!==generation)return false;
+  if(this.seen(id,generation,sourceId)||this.db.prepare('SELECT 1 FROM direct_social_receipts WHERE universe_id=? AND streamer=? AND source_hash=?').get(s.universe_id,s.tiktok,identity))return false;
+  const old=this.db.prepare('SELECT likes FROM direct_social_progress WHERE session_id=? AND generation=? AND actor_key=?').get(id,generation,actor.actorKey)?.likes??0;
+  const total=type==='like'?old+count:0,awards=type==='like'?Math.floor(total/LIKES_PER_BOOST):1;
+  if(awards){
+   const accepted=this.enqueueInside(id,generation,'social:'+identity,{...actor,eventType:type,effects:[{key:type==='like'?'speed_boost':'fly',value:1,count:awards}]},{sourceId});
+   if(!accepted)return false;
+  }else this.db.prepare('INSERT INTO sources VALUES(?,?,?,?)').run(id,generation,sourceId,this.now());
+  if(type==='like')this.db.prepare('INSERT INTO direct_social_progress VALUES(?,?,?,?) ON CONFLICT DO UPDATE SET likes=excluded.likes').run(id,generation,actor.actorKey,total%LIKES_PER_BOOST);
+  this.db.prepare('INSERT INTO direct_social_receipts VALUES(?,?,?,?)').run(s.universe_id,s.tiktok,identity,this.now());return true;
+ });}
  poll(id){return this.tx(()=>{
   const s=this.get(id);if(terminal.includes(s.status))throw new Fault('session_inactive',410);
   this.heartbeat(id);const now=this.now();
@@ -107,7 +123,7 @@ export class Store {
  prune(){this.tx(()=>{
   this.expireEvents();this.db.prepare('DELETE FROM inbox WHERE expires_at<=?').run(this.now());const cut=this.now()-3600000;
   this.db.prepare("DELETE FROM events AS e WHERE expires_at<? AND status!='pending' AND NOT (json_extract(payload,'$.eventType')='join' AND (EXISTS(SELECT 1 FROM actors a WHERE a.session_id=e.session_id AND a.generation=e.generation AND json_extract(a.payload,'$.joinEventId')=e.event_id) OR EXISTS(SELECT 1 FROM events d WHERE d.session_id=e.session_id AND d.generation=e.generation AND d.status='pending' AND json_extract(d.payload,'$.joinEventId')=e.event_id)))").run(cut);
-  this.db.prepare('DELETE FROM sources WHERE seen_at<?').run(cut);this.db.prepare("DELETE FROM sessions WHERE status IN ('closed','expired','error') AND seen_at<?").run(this.now()-86400000);
+  this.db.prepare('DELETE FROM sources WHERE seen_at<?').run(cut);this.db.prepare('DELETE FROM direct_social_receipts WHERE seen_at<?').run(cut);this.db.prepare("DELETE FROM sessions WHERE status IN ('closed','expired','error') AND seen_at<?").run(this.now()-86400000);
  });}
 
  inboxDepth(id){return this.db.prepare('SELECT COUNT(*) AS n FROM inbox WHERE session_id=? AND expires_at>?').get(id,this.now()).n;}

@@ -3,18 +3,28 @@ import {Fault} from './store.mjs';
 const idString=value=>typeof value==='string'&&/^[A-Za-z0-9._:-]{1,128}$/.test(value)?value:Number.isSafeInteger(value)?String(value):null;
 export function compactMessage(message){
  const type=message?.type,d=message?.data;
- if(!d||!['WebcastChatMessage','WebcastGiftMessage','WebcastLikeMessage','WebcastSocialMessage'].includes(type))return null;
+ if(!d||!['WebcastChatMessage','WebcastGiftMessage','WebcastLikeMessage','WebcastSocialMessage','WebcastFollowMessage'].includes(type))return null;
  const msgId=idString(d.common?.msgId??d.msgId),userId=idString(d.user?.userId??d.user?.id);
  if(!msgId||!userId)return null;
  const user={userId,displayId:String(d.user.displayId??d.user.uniqueId??userId).slice(0,64)};
  const data={user};
+ if(type==='WebcastLikeMessage'){
+  const count=Number(d.count??d.likeCount);
+  if(!Number.isSafeInteger(count)||count<1||count>200000)return null;
+  data.likeCount=count;
+ }
+ if(type==='WebcastSocialMessage'||type==='WebcastFollowMessage'){
+  const display=String(d.common?.displayText?.key??d.displayType??'').toLowerCase();
+  data.socialType=type==='WebcastFollowMessage'||display.includes('follow')&&!display.includes('unfollow')?'follow':display.includes('share')?'share':'unknown';
+ }
+ data.roomId=idString(d.common?.roomId??d.roomId);
  if(type==='WebcastChatMessage')data.comment=String(d.comment??d.content??'').slice(0,200);
  if(type==='WebcastGiftMessage'){
   data.giftId=idString(d.giftId);data.giftName=String(d.giftDetails?.giftName??d.giftDetails?.name??d.gift?.name??d.giftName??d.giftId??"").slice(0,80);data.groupId=idString(d.groupId);data.roomId=idString(d.common?.roomId??d.roomId);data.repeatCount=Number(d.repeatCount??1);
   data.repeatEnd=d.repeatEnd===true||d.repeatEnd===1||d.repeatEnd==='1';
   data.giftType=Number(d.giftType??d.giftDetails?.giftType??d.giftDetails?.type??d.gift?.type??NaN);
  }
- return {type,data,sourceId:`${type}:${msgId}`};
+ return {type,data,sourceId:`${data.socialType==='follow'?'follow':type}:${msgId}`};
 }
 export class EventTranslator {
  constructor(store,{resolve,giftMap,maxActors=30,signalInterval=5000}){Object.assign(this,{store,resolve,giftMap,maxActors,signalInterval});}
@@ -43,6 +53,12 @@ export class EventTranslator {
    const giftIdentity=createHash('sha256').update(JSON.stringify([d.roomId??'',key])).digest('hex');
    const eventId=`gift:${giftIdentity}`;
    return this.store.enqueue(id,generation,eventId,{...actor,eventType:'gift',giftId:d.giftId,effects:[{key:effect.key,value:effect.value,count:d.repeatCount}]},{sourceId:key,giftIdentity});
+  }
+  if(type==='WebcastLikeMessage'||type==='WebcastSocialMessage'||type==='WebcastFollowMessage'){
+   if(s.provider!=='direct')return false;
+   if(type!=='WebcastLikeMessage'&&d.socialType!=='follow')return false;
+   const identity=createHash('sha256').update(JSON.stringify([d.roomId??'',actorKey,sourceId])).digest('hex');
+   return this.store.socialEvent(id,generation,actor,sourceId,identity,type==='WebcastLikeMessage'?'like':'follow',d.likeCount);
   }
   const bucket=Math.floor(this.store.now()/this.signalInterval);
   const key=`signal:${actorKey}:${bucket}`;

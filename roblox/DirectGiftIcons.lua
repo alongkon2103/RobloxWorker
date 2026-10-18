@@ -1,5 +1,7 @@
 -- TikTok gift IDs mapped to uploaded Roblox images. Keep ScaleType.Fit in the UI.
 return {
+ ["follow"]="rbxassetid://106880794002228", -- Follow action
+ ["like"]="rbxassetid://124040486909581", -- Like action
  ["5487"]="rbxassetid://73939306405585", -- Finger Heart
  ["5585"]="rbxassetid://127578354023476", -- Confetti
  ["5586"]="rbxassetid://127765838101214", -- Hearts
