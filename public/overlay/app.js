@@ -1,17 +1,17 @@
+import {RacerAvatars} from '/overlay/avatar-renderer.js';
 import {separateMarkers} from '/overlay/marker-layout.js';
 const params=new URLSearchParams(location.search),root=document.querySelector('#overlay'),canvas=document.querySelector('#map'),ctx=canvas.getContext('2d');
-const view=['map','ranking','speed','all'].includes(params.get('view'))?params.get('view'):'map';root.className=view;
+const view=['map','ranking','speed','top-win','all'].includes(params.get('view'))?params.get('view'):'map';root.className=view;
 let key=location.hash.slice(1),frames=[],latest=null,lastSequence=-1,lastRound='',lastUI=0,failures=0,route=null,project=null;
 const palette=['#9df5dc','#ffda88','#c5b0ff','#ffb9c4','#9cdcff','#e2f5a6'];
-const avatarImages=new Map();
-function loadAvatars(racers){for(const r of racers){if(!r.avatarUrl||avatarImages.get(r.robloxId)?.url===r.avatarUrl)continue;const img=new Image();img.decoding='async';img.src=r.avatarUrl;avatarImages.set(r.robloxId,{url:r.avatarUrl,img});}}
+const avatarImages=new RacerAvatars(params.get('avatar'));
 const labels={rocket:'ROCKET',rainbow_cat:'RAINBOW CAT',naruto:'NARUTO',goku:'GOKU',asta:'ASTA'};
 const hash=s=>{let h=0;for(const c of s)h=(h*31+c.charCodeAt(0))>>>0;return h;};
 const color=r=>palette[hash(r.id)%palette.length];
 const number=n=>Number(n).toLocaleString('en-US',{maximumFractionDigits:0});
 function setState(data){
- const now=performance.now();if(data.snapshot)loadAvatars(data.snapshot.racers);latest=data;root.classList.toggle('stale',!data.online);
- document.querySelector('#connection').textContent=data.online?'':data.snapshot?'Signal interrupted · waiting for game':'Enable your overlay in game';
+ const now=performance.now();avatarImages.load([...(data.topWin?.rows??[]),...(data.snapshot?.racers??[])]);latest=data;if(data.topWin){board('wins',data.topWin.rows,null,'wins');document.querySelector('#win-week').textContent='WEEK '+data.topWin.week+' · RESETS MONDAY 00:00 TH';}root.classList.toggle('stale',!data.online);
+ document.querySelector('#connection').textContent=data.online?'':view==='top-win'?'':data.snapshot?'Signal interrupted · waiting for game':'Waiting for game';
  if(!data.snapshot||data.sequence===lastSequence)return;
  const s=data.snapshot;if(s.round!==lastRound){frames=[];lastRound=s.round;}
  lastSequence=data.sequence;frames.push({at:now,s});while(frames.length>5)frames.shift();
@@ -59,7 +59,7 @@ function draw(s,now){
  if(now-lastPortraitMeta>250){canvas.dataset.portraits=JSON.stringify(markers.map(m=>({id:m.id,x:Math.round(m.x),y:Math.round(m.y)})));lastPortraitMeta=now;}
 
  for(const m of [...markers].sort((a,b)=>(b.racer.rank||999)-(a.racer.rank||999)||a.id.localeCompare(b.id))){
-  const r=m.racer,x=m.x,y=m.y,size=m.radius;ctx.shadowColor='#0008';ctx.shadowBlur=6;ctx.beginPath();ctx.arc(x,y,size+3,0,Math.PI*2);ctx.fillStyle='#122239';ctx.fill();ctx.beginPath();ctx.arc(x,y,size,0,Math.PI*2);ctx.fillStyle=color(r);ctx.fill();ctx.shadowBlur=0;const avatar=avatarImages.get(r.robloxId)?.img;
+  const r=m.racer,x=m.x,y=m.y,size=m.radius;ctx.shadowColor='#0008';ctx.shadowBlur=6;ctx.beginPath();ctx.arc(x,y,size+3,0,Math.PI*2);ctx.fillStyle='#122239';ctx.fill();ctx.beginPath();ctx.arc(x,y,size,0,Math.PI*2);ctx.fillStyle=color(r);ctx.fill();ctx.shadowBlur=0;const avatar=avatarImages.get(r.id)?.img;
   ctx.save();ctx.beginPath();ctx.arc(x,y,size-1,0,Math.PI*2);ctx.clip();
   if(avatar?.complete&&avatar.naturalWidth>0)ctx.drawImage(avatar,x-size,y-size,size*2,size*2);
   else{ctx.fillStyle='#263c54';ctx.beginPath();ctx.arc(x,y-4,size*.3,0,Math.PI*2);ctx.fill();ctx.beginPath();ctx.ellipse(x,y+size*.65,size*.65,size*.5,0,0,Math.PI*2);ctx.fill();}
@@ -68,8 +68,8 @@ function draw(s,now){
 }
 const boards=new Map();
 function board(id,list,s,top){
- const container=document.getElementById(id);let rows=boards.get(id);if(!rows){rows=new Map();boards.set(id,rows);}const keep=new Set();
- list.slice(0,5).forEach((r,i)=>{keep.add(r.id);let row=rows.get(r.id);if(!row){row=document.createElement('div');row.className='row';row.innerHTML='<span class="place"></span><span class="avatar"></span><div class="identity"><div class="name"></div><div class="badge"></div></div><div class="metric"></div>';container.append(row);rows.set(r.id,row);}row.style.transform=`translateY(${i*46+4}px)`;row.dataset.place=String(i+1);row.querySelector('.place').textContent=i+1;row.querySelector('.name').textContent=r.name;const av=row.querySelector('.avatar');av.style.background=color(r);const avatar=avatarImages.get(r.robloxId);if(avatar&&av.dataset.url!==avatar.url){av.replaceChildren();const img=document.createElement('img');img.alt='';img.src=avatar.url;img.decoding='async';av.append(img);av.dataset.url=avatar.url;av.classList.add('has-avatar');}row.querySelector('.badge').textContent=top?'CURRENT SPEED':r.state==='Finished'?'FINISHED':`LAP ${Math.min(s.laps,Math.floor(Math.max(0,r.distance)/s.route.length)+1)} / ${s.laps}`;const kmh=r.speed*s.metersPerStud*3.6;row.querySelector('.metric').textContent=number(kmh);const unit=document.createElement('small');unit.textContent='km/h';row.querySelector('.metric').append(unit);});
+ const container=document.getElementById(id);if(top==='wins')container.style.height=Math.max(50,Math.min(10,list.length)*46+4)+'px';let rows=boards.get(id);if(!rows){rows=new Map();boards.set(id,rows);}const keep=new Set();
+ list.slice(0,top==='wins'?10:5).forEach((r,i)=>{keep.add(r.id);let row=rows.get(r.id);if(!row){row=document.createElement('div');row.className='row';row.innerHTML='<span class="place"></span><span class="avatar"></span><div class="identity"><div class="name"></div><div class="badge"></div></div><div class="metric"></div>';container.append(row);rows.set(r.id,row);}row.style.transform=`translateY(${i*46+4}px)`;row.dataset.place=String(i+1);row.querySelector('.place').textContent=i+1;row.querySelector('.name').textContent=r.name;const av=row.querySelector('.avatar');av.style.background=color(r);const avatar=avatarImages.get(r.id);if(avatar&&av.dataset.url!==avatar.url){av.replaceChildren();const img=document.createElement('img');img.alt='';img.decoding='async';const url=avatar.url;img.onerror=()=>avatarImages.fallback(r.id,url);img.src=url;av.append(img);av.dataset.url=avatar.url;av.classList.add('has-avatar');}else if(!avatar&&av.dataset.url){av.replaceChildren();delete av.dataset.url;av.classList.remove('has-avatar');}row.querySelector('.badge').textContent=top==='wins'?'WEEKLY WINS':top?'CURRENT SPEED':r.state==='Finished'?'FINISHED':`LAP ${Math.min(s.laps,Math.floor(Math.max(0,r.distance)/s.route.length)+1)} / ${s.laps}`;const kmh=top==='wins'?r.wins:r.speed*s.metersPerStud*3.6;row.querySelector('.metric').textContent=number(kmh);const unit=document.createElement('small');unit.textContent=top==='wins'?'wins':'km/h';row.querySelector('.metric').append(unit);});
  for(const [key,row]of rows)if(!keep.has(key)){row.remove();rows.delete(key);}
 }
 function animate(now){const s=rendered();if(view==='map'||view==='all')draw(s,now);if(s&&now-lastUI>100){lastUI=now;if(view==='map'||view==='all')board('map-ranks',[...s.racers].sort((a,b)=>(a.rank||999)-(b.rank||999)),s,false);if(view==='ranking'||view==='all')board('ranks',[...s.racers].sort((a,b)=>(a.rank||999)-(b.rank||999)),s,false);if(view==='speed'||view==='all')board('speeds',[...s.racers].sort((a,b)=>b.speed-a.speed||a.id.localeCompare(b.id)),s,true);}requestAnimationFrame(animate);}requestAnimationFrame(animate);
@@ -83,6 +83,6 @@ if(params.get('preview')==='1'){
  document.body.classList.add('preview');
  const points=Array.from({length:200},(_,i)=>{const t=i/200*Math.PI*2;return [Math.cos(t)*(200+80*Math.cos(3*t)),Math.sin(t)*(290+45*Math.sin(5*t))];});
  const names=['shrimpvry11','MintRunner','kalexd_a','CloudNine','RocketBoy','LilacDash','NinjaSky','SunnyCat'];let seq=0;
- setInterval(()=>{const time=performance.now()/1000;setState({online:true,sequence:++seq,snapshot:{round:'preview:1',phase:'Running',laps:2,metersPerStud:.28,route:{version:'preview',length:2400,points},racers:names.map((name,i)=>({id:'demo:'+i,robloxId:String(i+1),name,rank:i+1,distance:1800-i*155+time*16,speed:i===0?240:16+i*9,topSpeed:560-i*55,state:'Running',effects:i===0?[{key:'asta',tier:4,remaining:15}]:[]}))}});},1000);
+ setInterval(()=>{const time=performance.now()/1000;setState({online:true,sequence:++seq,topWin:{week:'2026-10-12',rows:names.map((name,i)=>({id:'demo:'+i,robloxId:String(i+1),name,wins:28-i*3}))},snapshot:{round:'preview:1',phase:'Running',laps:2,metersPerStud:.28,route:{version:'preview',length:2400,points},racers:names.map((name,i)=>({id:'demo:'+i,robloxId:String(i+1),name,rank:i+1,distance:1800-i*155+time*16,speed:i===0?240:16+i*9,topSpeed:560-i*55,state:'Running',effects:i===0?[{key:'asta',tier:4,remaining:15}]:[]}))}});},1000);
 }else poll();
 window.addEventListener('hashchange',()=>location.reload());

@@ -52,7 +52,7 @@ function Module.start(config)
 				end
 				local data = event.payload
 				if type(data) ~= "table" or (data.namespace ~= "test" and data.namespace ~= "live") or not event.actorKey or not event.actorKey:match("^" .. data.namespace .. ":") then return false, "invalid_actor" end
-				local context = {eventId = event.id, runId = event.runId, generation = event.generation, ownerRobloxId = event.ownerRobloxId, actorKey = event.actorKey, namespace = data.namespace, robloxId = data.robloxId, robloxUsername = data.robloxUsername, tiktokUsername = data.tiktokUsername, eventType = event.eventType, effects = data.effects, comment = data.comment, giftId = data.giftId, quantity = data.quantity, tiktokAvatarUrl = data.tiktokAvatarUrl}
+				local context = {eventId = event.id, runId = event.runId, generation = event.generation, ownerRobloxId = event.ownerRobloxId, actorKey = event.actorKey, namespace = data.namespace, robloxId = data.robloxId, robloxUsername = data.robloxUsername, tiktokUsername = data.tiktokUsername, tiktokDisplayName = data.tiktokDisplayName or data.tiktokNickname or data.tiktokUsername, eventType = event.eventType, effects = data.effects, comment = data.comment, giftId = data.giftId, quantity = data.quantity, tiktokAvatarUrl = data.tiktokAvatarUrl}
 				if event.eventType == "join" then
 					if not actors[actorKey] and actorCount >= 10000 then return false, "viewer_limit" end
 					if not config.onViewerJoin then return false, "unsupported_effect" end

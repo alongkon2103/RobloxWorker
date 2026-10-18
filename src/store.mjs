@@ -33,6 +33,9 @@ export class Store {
   if(!this.db.prepare('PRAGMA table_info(published_gift_defaults)').all().some(c=>c.name==='gift_names'))this.db.exec("ALTER TABLE published_gift_defaults ADD COLUMN gift_names TEXT NOT NULL DEFAULT '{}'");
   for(const [name,sql]of [['gift_names',"TEXT NOT NULL DEFAULT '{}'"],['universe_id',"TEXT NOT NULL DEFAULT ''"],['gift_map_version','TEXT'],['gift_map_source','TEXT']])if(!columns.has(name))this.db.exec(`ALTER TABLE sessions ADD COLUMN ${name} ${sql}`);
   if(!this.db.prepare('PRAGMA table_info(sessions)').all().some(c=>c.name==='join_mode'))this.db.exec("ALTER TABLE sessions ADD COLUMN join_mode TEXT NOT NULL DEFAULT 'both'");
+  // Keep authenticated channel/job bindings after disposable session rows are pruned.
+  this.db.exec(`CREATE TABLE IF NOT EXISTS direct_result_bindings(universe_id TEXT NOT NULL,owner_id TEXT NOT NULL,job_id TEXT NOT NULL,channel TEXT NOT NULL,PRIMARY KEY(universe_id,owner_id,job_id,channel));
+   INSERT OR IGNORE INTO direct_result_bindings SELECT universe_id,owner_id,job_id,tiktok FROM sessions WHERE provider='direct';`);
  }
  tx(fn){this.db.exec('BEGIN IMMEDIATE');try{const result=fn();this.db.exec('COMMIT');return result;}catch(e){this.db.exec('ROLLBACK');throw e;}}
  get(id){const s=this.db.prepare('SELECT * FROM sessions WHERE id=?').get(id);if(!s)throw new Fault('session_not_found',404);return s;}
@@ -46,6 +49,7 @@ export class Store {
    const id=randomUUID(),token=randomBytes(32).toString('base64url'),runId=randomUUID(),now=this.now();
    this.db.prepare('INSERT INTO sessions(id,token_hash,owner_id,job_id,tiktok,provider,status,run_id,generation,seen_at,created_at,gift_map,join_mode) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)').run(id,digest(token),ownerRobloxId,jobId,tiktokUsername,provider,provider==='direct'?'queued':'live',runId,1,now,now,giftMap===null?null:JSON.stringify(giftMap),joinMode);
    this.db.prepare('UPDATE sessions SET universe_id=?,gift_map_version=?,gift_map_source=?,gift_names=? WHERE id=?').run(universeId,giftMapVersion,giftMapSource,JSON.stringify(giftNames),id);
+   if(provider==='direct')this.db.prepare('INSERT OR IGNORE INTO direct_result_bindings VALUES(?,?,?,?)').run(universeId,ownerRobloxId,jobId,tiktokUsername);
    return {...this.public(this.get(id)),token};
   });
  }

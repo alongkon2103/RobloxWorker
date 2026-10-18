@@ -2,7 +2,7 @@
 return {
  Enabled=true,
  -- Enable only after deploying schema v2 and installing the map-specific server Secret.
- ScopedPublishingEnabled=false,
+ ScopedPublishingEnabled=true,
  MapSecretName="OVERLAY_MAP_API_KEY",
  PublishInterval=1,
  RouteSamples=1024,

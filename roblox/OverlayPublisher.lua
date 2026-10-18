@@ -5,6 +5,8 @@ local RS=game:GetService("ReplicatedStorage")
 local Settings=require(script.Parent.OverlayConfig)
 local RaceConfig=require(script.Parent.RaceConfig)
 local Events=require(RS.RaceEventConfig)
+local WinResults=require(script.Parent.TopWinResults)
+local Names=require(script.Parent.ViewerDisplayName)
 local Publisher={}
 function Publisher.start(config,transport)
  local entries={} local cooldown={} local active=true local sending=false
@@ -22,6 +24,22 @@ function Publisher.start(config,transport)
   return ok and key or nil
  end
  local key=bridgeKey()
+ local function ensure(p)
+  if not entries[p]then entries[p]={claimId=Http:GenerateGUID(false),enabled=true,nextBoard=0}end
+  return entries[p]
+ end
+ for _,p in Players:GetPlayers()do ensure(p)end
+ local joined=Players.PlayerAdded:Connect(ensure)
+ WinResults.start(transport,key)
+ local gameRemote=Instance.new('RemoteFunction')gameRemote.Name='OverlayGameData'gameRemote.Parent=RS
+ local gameCooldown={}
+ gameRemote.OnServerInvoke=function(p,version)
+  if (gameCooldown[p]or 0)>os.clock()then return nil end gameCooldown[p]=os.clock()+.75
+  local e=ensure(p)
+  local board=e.topWin
+  if board and board.nextResetAt and DateTime.now().UnixTimestampMillis>=board.nextResetAt then board=nil e.nextBoard=0 end
+  return {route=route and version~=routeVersion and route or nil,topWin=board}
+ end
  local function rebuild()
   if rebuilding then return end rebuilding=true
   local gatesFolder=RS:FindFirstChild("ViewerRoute")
@@ -63,16 +81,11 @@ function Publisher.start(config,transport)
  remote.OnServerInvoke=function(p,action)
   local now=os.clock()if now<(cooldown[p] or 0)then return {ok=false,error="cooldown"}end cooldown[p]=now+.5
   if not Settings.Enabled then return {ok=false,error="disabled"}end
-  if action=="disable"then if entries[p]then entries[p].enabled=false end status(p,"disabled")return {ok=true,enabled=false}end
   if action~="enable" and action~="info"then return {ok=false,error="invalid_action"}end
-  local e=entries[p]
-  if action=="enable" and not e then e={claimId=Http:GenerateGUID(false),enabled=true} entries[p]=e status(p,"connecting")end
-  if not e then return {ok=true,enabled=false}end
-  if action=="enable"then e.enabled=true end
-  if not e.enabled then return {ok=true,enabled=false}end
+  local e=ensure(p)
   if not e.readToken and not claim(p,e)then return {ok=false,enabled=true,error=p:GetAttribute("OverlayStatus")}end
   if not e.readToken then return {ok=false,error="connecting"}end
-  return {ok=true,enabled=true,urls={map=url(e,"map"),ranking=url(e,"ranking"),speed=url(e,"speed"),all=url(e,"all")}}
+  return {ok=true,enabled=true,urls={map=url(e,"map"),ranking=url(e,"ranking"),speed=url(e,"speed"),topWin=url(e,"top-win"),all=url(e,"all")}}
  end
  local function sample(p,e)
   local round=tostring(p:GetAttribute("ViewerRaceRound") or 1)
@@ -88,7 +101,7 @@ function Publisher.start(config,transport)
      local speed=math.clamp(m:GetAttribute("RouteSpeed") or 0,0,1500)
      local effects={} local now=workspace:GetServerTimeNow()
      for name,c in Events do local untilAt=m:GetAttribute(c.Attribute.."Until") or 0 if untilAt>now then table.insert(effects,{key=name,remaining=untilAt-now,tier=c.Tier or 0})end end
-     table.insert(racers,{id=actor,robloxId=tostring(m:GetAttribute("RobloxId")),name=tostring(m:GetAttribute("ViewerRobloxUsername") or m:GetAttribute("ViewerUsername") or m.Name):sub(1,80),distance=m:GetAttribute("RouteDistance") or -14,speed=speed,topSpeed=speed,rank=m:GetAttribute("RaceRank") or 0,state=m:GetAttribute("RaceState") or "Lobby",effects=effects})
+     table.insert(racers,{id=actor,robloxId=tostring(m:GetAttribute("RobloxId")),name=tostring(m:GetAttribute("ViewerDisplayName") or "Viewer"),distance=m:GetAttribute("RouteDistance") or -14,speed=speed,topSpeed=speed,rank=m:GetAttribute("RaceRank") or 0,state=m:GetAttribute("RaceState") or "Lobby",effects=effects,tiktokAvatarUrl=m:GetAttribute("ViewerTikTokAvatarUrl")})
     end
    end
   end end
@@ -99,10 +112,30 @@ function Publisher.start(config,transport)
   if sending then return end sending=true
   task.spawn(function()
    local ok=pcall(function()
+    if key then WinResults.start(transport,key)WinResults.flush()end
     if routeDirty or not route then rebuild()end if not route then return end
     local items,owners={} ,{} local includeRoute=false
     for p,e in entries do if p.Parent and e.enabled and not e.claiming then
      if not e.writeToken then claim(p,e)end
+     if os.clock()>=(e.nextBoard or 0)then
+      e.nextBoard=os.clock()+10
+      local body={ownerRobloxId=tostring(p.UserId),jobId=transport.jobId}
+      if p:GetAttribute('LiveEnabled')then body.provider=p:GetAttribute('LiveProvider')body.channel=p:GetAttribute('LiveUsername')end
+      if body.provider=='direct'and(not body.channel or body.channel=='')then body.provider=nil end
+      local board,code=transport.request('/v1/overlays/top-win/board','POST',body,key)
+      if code==200 and board and type(board.rows)=='table'then
+       e.names=e.names or {}
+       for _,r in board.rows do
+        local cache=e.names[r.id]
+        if not cache or cache.input~=r.name or os.clock()>cache.untilAt then
+         local filtered=Names.filter(r.name,p.UserId)
+         cache={input=r.name,value=filtered,untilAt=os.clock()+90}e.names[r.id]=cache
+        end
+        r.name=cache.value
+       end
+       e.topWin=board
+      end
+     end
      if e.writeToken then
       e.sequence+=1 local snapshot=sample(p,e)
       table.insert(items,{writeToken=e.writeToken,sequence=e.sequence,snapshot=snapshot})table.insert(owners,{p=p,e=e})
@@ -137,7 +170,7 @@ function Publisher.start(config,transport)
  local changed=gates.DescendantAdded:Connect(function()routeDirty=true end)
  local removed=gates.DescendantRemoving:Connect(function()routeDirty=true end)
  local leave=Players.PlayerRemoving:Connect(function(p)
-  local e=entries[p] entries[p]=nil cooldown[p]=nil
+  local e=entries[p] entries[p]=nil cooldown[p]=nil gameCooldown[p]=nil
   if e and e.writeToken then task.spawn(function()transport.request("/v1/overlays/release","POST",{},e.writeToken)end)end
  end)
  task.spawn(function()
@@ -146,6 +179,6 @@ function Publisher.start(config,transport)
    if active then send()end
   end
  end)
- return {stop=function()active=false changed:Disconnect()removed:Disconnect()leave:Disconnect()remote:Destroy()end}
+ return {stop=function()active=false changed:Disconnect()removed:Disconnect()leave:Disconnect()joined:Disconnect()remote:Destroy()gameRemote:Destroy()end}
 end
 return Publisher

@@ -77,7 +77,7 @@ function Handlers.join(context)
 	local existing = arena.actors[context.actorKey]
 	if existing and existing.robloxId == robloxId and existing.model.Parent and existing.humanoid.Health > 0 then
 		existing.lastSeen = os.clock()
-		Presentation.nameplate(existing.model,context.tiktokDisplayName or context.tiktokUsername or existing.username,existing.username)
+        Presentation.nameplate(existing.model,context.tiktokDisplayName or context.tiktokUsername or existing.username,existing.username)
 		return true
 	end
 	if arena.joining[context.actorKey] then return false, "join_in_progress" end
@@ -268,9 +268,12 @@ function Handlers.event(context)
 	end
 	entry.receipts[context.eventId] = now + 60
  -- Accepted, deduplicated gifts update the roster; social signals do not.
- entry.model:SetAttribute("ViewerLastGiftText",GiftRosterInfo.summarize(context.effects))
- entry.model:SetAttribute("ViewerLastGiftAt",workspace:GetServerTimeNow())
- entry.model:SetAttribute("ViewerLastGiftRevision",(entry.model:GetAttribute("ViewerLastGiftRevision")or 0)+1)
+ local giftText=GiftRosterInfo.summarize(context.effects)
+ if giftText~="" then
+  entry.model:SetAttribute("ViewerLastGiftText",giftText)
+  entry.model:SetAttribute("ViewerLastGiftAt",workspace:GetServerTimeNow())
+  entry.model:SetAttribute("ViewerLastGiftRevision",(entry.model:GetAttribute("ViewerLastGiftRevision")or 0)+1)
+ end
  if astaGift then
   -- Dedicated revision counts accepted deliveries even with a capped or paused timer.
   entry.model:SetAttribute("AstaCutsceneAt",workspace:GetServerTimeNow())

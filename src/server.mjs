@@ -26,7 +26,7 @@ export function createAPI(store,config,{log=()=>{},thumbnailFetch=fetch,defaults
  const avatars=new AvatarCache({fetcher:thumbnailFetch,now:()=>store.now()});
  const publishOverlay=(key,b,universe)=>{const result=overlays.publish(key,b,universe);avatars.enqueue(b.snapshot.racers.map(r=>r.robloxId));return result;};
  const assets=new Map();
- for(const [url,file,type] of [["/overlay","index.html","text/html; charset=utf-8"],["/overlay/app.js","app.js","text/javascript; charset=utf-8"],["/overlay/overlay.css","overlay.css","text/css; charset=utf-8"],["/overlay/art.png","art.png","image/png"],["/overlay/marker-layout.js","marker-layout.js","text/javascript; charset=utf-8"]]){try{assets.set(url,{data:readFileSync(new URL("../public/overlay/"+file,import.meta.url)),type});}catch{}}
+ for(const [url,file,type] of [["/overlay","index.html","text/html; charset=utf-8"],["/overlay/app.js","app.js","text/javascript; charset=utf-8"],["/overlay/overlay.css","overlay.css","text/css; charset=utf-8"],["/overlay/art.png","art.png","image/png"],["/overlay/marker-layout.js","marker-layout.js","text/javascript; charset=utf-8"],["/overlay/avatar-renderer.js","avatar-renderer.js","text/javascript; charset=utf-8"]]){try{assets.set(url,{data:readFileSync(new URL("../public/overlay/"+file,import.meta.url)),type});}catch{}}
  // Content-addressed asset names also work when a proxy forces a long browser cache.
  const fingerprint=(path,extension)=>{
   const asset=assets.get(path);if(!asset)return path;
@@ -34,8 +34,8 @@ export function createAPI(store,config,{log=()=>{},thumbnailFetch=fetch,defaults
   const name=path.slice(0,-extension.length)+hash+'.'+extension;
   assets.set(name,{...asset,immutable:true});return name;
  };
- const helper=fingerprint('/overlay/marker-layout.js','js');
- const app=assets.get('/overlay/app.js');if(app)app.data=Buffer.from(app.data.toString().replace('/overlay/marker-layout.js',helper));
+ const helper=fingerprint('/overlay/marker-layout.js','js'),avatarHelper=fingerprint('/overlay/avatar-renderer.js','js');
+ const app=assets.get('/overlay/app.js');if(app)app.data=Buffer.from(app.data.toString().replace('/overlay/marker-layout.js',helper).replace('/overlay/avatar-renderer.js',avatarHelper));
  const appURL=fingerprint('/overlay/app.js','js'),cssURL=fingerprint('/overlay/overlay.css','css'),artURL=fingerprint('/overlay/art.png','png');
  const html=assets.get('/overlay');if(html)html.data=Buffer.from(html.data.toString().replace('/overlay/app.js',appURL).replace('/overlay/overlay.css',cssURL).replace('/overlay/art.png',artURL));
  const rates=new Map();
@@ -49,7 +49,7 @@ export function createAPI(store,config,{log=()=>{},thumbnailFetch=fetch,defaults
    const token=req.headers.authorization?.match(/^Bearer ([^\s]+)$/)?.[1];
    const privileged=key=>{if(!constantEqual(token,key))throw new Fault('unauthorized',401);};
    const asset=assets.get(path);
-   if(asset&&method==='GET'){res.writeHead(200,{'content-type':asset.type,'cache-control':asset.immutable?'public, max-age=31536000, immutable':'no-store','x-content-type-options':'nosniff','referrer-policy':'no-referrer','content-security-policy':"default-src 'self'; img-src 'self' data: https://*.rbxcdn.com; style-src 'self'; script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"});res.end(asset.data);return;}
+   if(asset&&method==='GET'){res.writeHead(200,{'content-type':asset.type,'cache-control':asset.immutable?'public, max-age=31536000, immutable':'no-store','x-content-type-options':'nosniff','referrer-policy':'no-referrer','content-security-policy':"default-src 'self'; img-src 'self' data: https://rbxcdn.com https://*.rbxcdn.com https://tiktokcdn.com https://*.tiktokcdn.com https://tiktokcdn-us.com https://*.tiktokcdn-us.com https://tiktokcdn-eu.com https://*.tiktokcdn-eu.com https://byteoversea.com https://*.byteoversea.com https://ibytedtos.com https://*.ibytedtos.com; style-src 'self'; script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"});res.end(asset.data);return;}
    const publisherScope=()=>{
     if(constantEqual(token,config.bridgeKey))return '';
     for(const [universe,key]of Object.entries(config.overlayMapKeys??{}))if(constantEqual(token,key))return universe;
@@ -63,8 +63,19 @@ export function createAPI(store,config,{log=()=>{},thumbnailFetch=fetch,defaults
     if(!validID(b.ownerRobloxId)||!validID(b.universeId))throw new Fault('invalid_overlay_claim');
     if(!(config.overlayUniverses??[]).includes(b.universeId))throw new Fault('overlay_universe_forbidden',403);
     const p=overlays.profile(b.ownerRobloxId,b.universeId);
-    const urls=Object.fromEntries(['map','ranking','speed','all'].map(view=>[view,config.overlayOrigin+'/overlay?view='+view+'#'+p.readToken]));
+    const urls=Object.fromEntries(['map','ranking','speed','top-win','all'].map(view=>[view==='top-win'?'topWin':view,config.overlayOrigin+'/overlay?view='+view+'#'+p.readToken]));
     send(200,{ok:true,schemaVersion:2,ownerRobloxId:b.ownerRobloxId,universeId:b.universeId,online:p.online,urls});return;
+   }
+   if((path==='/v1/overlays/top-win/result'||path==='/v1/overlays/top-win/board')&&method==='POST'){
+    const universe=publisherScope();rate('top-win:'+universe,600);const b=await readJSON(req,4096);
+    positiveID(b.ownerRobloxId,'owner_id');job(b.jobId);
+    if(b.provider==='direct'){
+     const bound=store.db.prepare("SELECT 1 FROM direct_result_bindings WHERE owner_id=? AND job_id=? AND channel=? AND (?='' OR universe_id=?) LIMIT 1").get(b.ownerRobloxId,b.jobId,b.channel,universe,universe);
+     if(!bound)throw new Fault('win_channel_mismatch',403);
+    }
+    if(path.endsWith('/result'))send(200,overlays.topWin.record(universe,b));
+    else {if(b.provider)overlays.topWin.bind(universe,b.ownerRobloxId,b.provider,b.channel);send(200,overlays.topWin.board(universe,b.ownerRobloxId));}
+    return;
    }
    if(path==='/v1/overlays/claim'&&method==='POST'){
     const universe=publisherScope();rate('overlay-claim:'+universe,600);const b=await readJSON(req,4096);
@@ -79,7 +90,7 @@ export function createAPI(store,config,{log=()=>{},thumbnailFetch=fetch,defaults
     const results=body.items.map(item=>{try{return publishOverlay(item?.writeToken,{sequence:item?.sequence,snapshot:{...item?.snapshot,...(body.route?{route:body.route}:{})}},universe);}catch(e){return {ok:false,error:e instanceof Fault?e.code:'internal_error'};}});
     send(200,{results});return;
    }
-   if(path==='/v1/overlay/state'&&method==='GET'){const state=overlays.read(token);if(state.snapshot)state.snapshot={...state.snapshot,racers:state.snapshot.racers.map(r=>({...r,avatarUrl:avatars.get(r.robloxId)}))};send(200,state);return;}
+   if(path==='/v1/overlay/state'&&method==='GET'){const state=overlays.read(token);avatars.enqueue(state.topWin.rows.map(r=>r.robloxId));state.topWin.rows=state.topWin.rows.map(r=>({...r,avatarUrl:avatars.get(r.robloxId)}));if(state.snapshot)state.snapshot={...state.snapshot,racers:state.snapshot.racers.map(r=>({...r,avatarUrl:avatars.get(r.robloxId)}))};send(200,state);return;}
    const view=s=>({...store.public(s),giftMap:store.effectiveGiftMap(s.id,config.giftMap),giftMappings:s.provider==='direct'?directMappings(store.giftMappings(s.id,config.giftMap)):[]});
    if(path==='/v1/direct/gift-mappings'&&method==='GET'){
     privileged(config.bridgeKey);rate('gift-preview',120);

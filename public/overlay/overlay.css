@@ -16,3 +16,9 @@ h1{margin:0;font-size:18px;letter-spacing:.6px;color:var(--mint);text-shadow:0 2
 #connection{left:14px;top:-12px;background:#111d317d;font-size:9px}.rows:empty:after{font-size:11px;text-shadow:0 1px 2px #06101f;color:white}#empty{font-size:14px}#empty span{text-shadow:0 1px 2px #06101f;color:#fff}
 .map-top{margin:12px 4px 0}.map-top h2{margin:0 0 7px 15px;color:var(--mint);font-size:12px;font-style:italic;letter-spacing:1px;text-shadow:0 1px 3px #06101f}.rows{height:236px}.map-top .row{transform:skew(-4deg)}.avatar{position:relative;overflow:hidden}.avatar img{width:100%;height:100%;object-fit:cover;display:block}.avatar:not(.has-avatar):before{content:'';position:absolute;width:8px;height:8px;border-radius:50%;background:#263c54;left:9px;top:5px}.avatar:not(.has-avatar):after{content:'';position:absolute;width:18px;height:13px;border-radius:50%;background:#263c54;left:4px;top:15px}
 .map-stage{height:370px}.map-stage canvas{object-fit:contain}
+
+/* Weekly view shares the live leaderboard treatment. */
+#overlay:not(.all):not(.top-win) .weekly,#overlay.top-win .course,#overlay.top-win .standings,#overlay.top-win .velocity{display:none}
+.weekly h1{color:var(--gold)}.weekly .row{border-left-color:var(--gold)}.weekly .metric{color:var(--gold)}.weekly .rows{height:50px}
+.win-week{font-size:9px;letter-spacing:.7px;margin-top:6px;color:#e1edf8;text-shadow:0 1px 3px #06101f}
+#wins:empty:after{content:"No winners this week"}

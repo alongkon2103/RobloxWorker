@@ -31,7 +31,7 @@ test('HTTP integration authorization and credential-bound publisher without take
   const results=await Promise.all(Array.from({length:8},()=>post(path,config.overlayServiceKey,body)));
   const a=results[0];assert.equal(a.status,200);assert.equal(a.data.schemaVersion,2);assert.equal(a.data.online,false);assert.equal(a.headers.get('cache-control'),'no-store');assert.equal(a.headers.get('referrer-policy'),'no-referrer');
   for(const r of results)assert.deepEqual(r.data.urls,a.data.urls);
-  const tokens=new Set();for(const [view,link]of Object.entries(a.data.urls)){const u=new URL(link);assert.equal(u.origin,config.overlayOrigin);assert.equal(u.pathname,'/overlay');assert.equal(u.search,'?view='+view);assert.match(u.hash,/^#[A-Za-z0-9_-]{43}$/);tokens.add(u.hash);}
+  const tokens=new Set();for(const [view,link]of Object.entries(a.data.urls)){const u=new URL(link);assert.equal(u.origin,config.overlayOrigin);assert.equal(u.pathname,'/overlay');assert.equal(u.search,'?view='+(view==='topWin'?'top-win':view));assert.match(u.hash,/^#[A-Za-z0-9_-]{43}$/);tokens.add(u.hash);}
   assert.equal(tokens.size,1);const read=new URL(a.data.urls.map).hash.slice(1);
   const claimBody={...body,jobId:'j',claimId:'c'};
   assert.equal((await post('/v1/overlays/claim',config.bridgeKey,claimBody)).status,403);
