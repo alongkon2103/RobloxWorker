@@ -96,42 +96,6 @@ function Presentation.nameplate(model, viewerName, avatarName)
  gradient.Rotation = style == 3 and 30 or 90
  gradient.Parent = card
  local accent = Color3.fromHex(palette[4])
- local decorations = Instance.new("Frame")
- decorations.Name = "Decorations"
- decorations.BackgroundTransparency = 1
- decorations.Position = UDim2.fromOffset(48, 8)
- decorations.Size = UDim2.new(1, -80, 1, -16)
- decorations.ClipsDescendants = true
- decorations.Parent = card
- corner(decorations, 17)
- if style == 1 then
-  for i = 1, 3 do
-   local dot = Instance.new("Frame")
-   dot.Name = "Confetti"
-   dot.Size = UDim2.fromOffset(5, 5)
-   dot.Position = UDim2.new(1, -9 - i * 7, 0, i % 2 == 0 and 5 or 25)
-   dot.BackgroundColor3 = accent
-   dot.BackgroundTransparency = .15
-   dot.BorderSizePixel = 0
-   dot.Parent = decorations
-   corner(dot, 3)
-  end
- elseif style == 2 then
-  local sparkle = text(decorations, "Sparkle", "✦", 15, UDim2.new(1, -21, 0, 4), accent)
-  sparkle.Size = UDim2.fromOffset(18, 24)
- else
-  for i = 1, 3 do
-   local stripe = Instance.new("Frame")
-   stripe.Name = "Ribbon"
-   stripe.Position = UDim2.new(1, -5 - i * 11, 0, 7)
-   stripe.Size = UDim2.fromOffset(4, 20)
-   stripe.Rotation = 25
-   stripe.BackgroundColor3 = accent
-   stripe.BackgroundTransparency = .65
-   stripe.BorderSizePixel = 0
-   stripe.Parent = decorations
-  end
- end
  local badge = Instance.new("TextLabel")
  badge.Name = "Rank"
  badge.Position = UDim2.fromOffset(2, 2)
