@@ -1,0 +1,707 @@
+--- a/server/src/gameRuntime.js
++++ b/server/src/gameRuntime.js
+@@ -19,8 +19,8 @@
+   const value={userId:String(user.id),username:user.name};if(lookupCache.size>=1000)lookupCache.delete(lookupCache.keys().next().value);lookupCache.set(key,{value,until:Date.now()+300000});return value;
+  }finally{lookups--}
+ }
+-function createRuntime({db=require('./db'),catalog=(...args)=>require('./gameCatalog').catalog(...args),clock=Date.now,resolveRoblox:resolve=resolveRoblox,pollMs=20000,checkMs=500}={}){
+- const now=()=>new Date(clock());let waiting=0;const polling=new Set();
++function createRuntime({db=require('./db'),catalog=(...args)=>require('./gameCatalog').catalog(...args),clock=Date.now,resolveRoblox:resolve=resolveRoblox,pollMs=20000,checkMs=100}={}){
++ const now=()=>new Date(clock());let waiting=0;const polling=new Set(),claimCursors=new Map();
+  const safe=run=>({id:run.id,gameId:run.gameId,accountId:run.accountId,state:run.state,generation:run.generation,validUntil:run.validUntil,serverId:run.serverSessionId,defaultsVersion:run.defaultsVersion||null,rulesSource:run.rulesSource||'override',...(run.servers?{servers:run.servers}:{}),...(run.openUrl?{openUrl:run.openUrl}:{})});
+  async function lockUser(tx,userId){await tx.$queryRaw`SELECT "id" FROM "User" WHERE "id"=${userId} FOR UPDATE`;}
+  async function owned(userId,input){
+@@ -90,15 +90,16 @@
+  async function registerServer(token,input){
+   const credential=await db.gameCredential.findUnique({where:{tokenHash:hashToken(token)},include:{game:true}});if(!credential||credential.revokedAt)throw err(401,'invalid_game_credential');
+   validateServerRegistration(input,credential.game);const sessionToken=issueToken();
++  const {capabilities,...registration}=input,receiptCacheV2=capabilities?.receiptCacheV2===true;
+   const row=await db.$transaction(async tx=>{
+    await tx.$queryRaw`SELECT "id" FROM "GameCredential" WHERE "id"=${credential.id} FOR UPDATE`;
+    const key={credentialId_instanceNonce:{credentialId:credential.id,instanceNonce:input.instanceNonce}};
+    const old=await tx.gameServerSession.findUnique({where:key});
+    if(old&&(old.jobId!==input.jobId||old.placeId!==input.placeId||old.universeId!==input.universeId))throw err(409,'server_identity_conflict');
+    const current=await tx.gameCredential.findUnique({where:{id:credential.id}});if(current.revokedAt)throw err(401,'invalid_game_credential');
+-   return tx.gameServerSession.upsert({where:key,create:{...input,gameId:credential.gameId,credentialId:credential.id,tokenHash:hashToken(sessionToken),expiresAt:new Date(clock()+45000),quotaAt:now()},update:{tokenHash:hashToken(sessionToken),players:input.players,expiresAt:new Date(clock()+45000),closedAt:null,giftSource:input.giftSource||null}});
+-  });
+-  return{id:row.id,token:sessionToken,expiresAt:row.expiresAt};
++   return tx.gameServerSession.upsert({where:key,create:{...registration,receiptCacheV2,gameId:credential.gameId,credentialId:credential.id,tokenHash:hashToken(sessionToken),expiresAt:new Date(clock()+45000),quotaAt:now()},update:{receiptCacheV2,tokenHash:hashToken(sessionToken),players:input.players,expiresAt:new Date(clock()+45000),closedAt:null,giftSource:input.giftSource||null}});
++  });
++  return{id:row.id,token:sessionToken,expiresAt:row.expiresAt,capabilities:{batchAck:true,boundedPipeline:true}};
+  }
+  async function currentSession(tx,session,quota=false){
+   await tx.$queryRaw`SELECT "id" FROM "GameServerSession" WHERE "id"=${session.id} FOR UPDATE`;
+@@ -117,17 +118,17 @@
+    WHERE id IN (SELECT id FROM "GameDelivery" WHERE "runId"=${run.id} AND "expiresAt"<(${new Date(clock()-60000)} AT TIME ZONE 'UTC') AND (payload<>'{}'::jsonb OR status IN ('pending','leased')) LIMIT 100)`;
+   const reset=clock()-run.quotaAt.getTime()>=60000;
+   const tests=reset?0:run.testCount,requests=reset?0:run.liveRequests,events=reset?0:run.liveEvents;
+-  if(test?tests>=10:requests>=60||events+count>1200)throw err(429,'event_rate_limited');
++  if(test?tests>=10:requests>=160||events+count>1200)throw err(429,'event_rate_limited');
+   await tx.gameRun.update({where:{id:run.id},data:{quotaAt:reset?now():run.quotaAt,testCount:tests+(test?1:0),liveRequests:requests+(test?0:1),liveEvents:events+(test?0:count)}});
+  }
+- async function enqueue(tx,run,eventId,eventType,actorKey,payload){
++ async function enqueue(tx,run,eventId,eventType,actorKey,payload,server){
+   const found=await tx.gameDelivery.findUnique({where:{runId_generation_clientEventId:{runId:run.id,generation:run.generation,clientEventId:eventId}}});if(found)return found;
+   if(Buffer.byteLength(JSON.stringify(payload))>4096)throw err(400,'event_too_large');
+   const pending=await tx.gameDelivery.count({where:{runId:run.id,status:{in:['pending','leased']},expiresAt:{gt:now()}}});if(pending>=500)throw err(429,'queue_full');
+-  return tx.gameDelivery.create({data:{runId:run.id,generation:run.generation,serverSessionId:run.serverSessionId,ownerRobloxId:run.accountId,actorKey,eventType,payload,clientEventId:eventId,expiresAt:new Date(Math.min(clock()+15000,run.validUntil.getTime()))}});
++  return tx.gameDelivery.create({data:{runId:run.id,generation:run.generation,serverSessionId:run.serverSessionId,ownerRobloxId:run.accountId,actorKey,eventType,payload,clientEventId:eventId,expiresAt:new Date(server.receiptCacheV2?clock()+120000:Math.min(clock()+15000,run.validUntil.getTime()))}});
+  }
+  async function checkRunSession(tx,run){const s=await tx.gameServerSession.findUnique({where:{id:run.serverSessionId},include:{game:true,credential:true}});if(!s||s.closedAt||s.expiresAt<=now()||s.credential.revokedAt||!s.game.active||s.game.version!==run.version||!s.players.includes(run.accountId))throw err(409,'game_not_ready');if(s.game.universeId===UNIVERSE&&!run.defaultsSnapshot)throw err(409,'runtime_upgrade_required');return s;}
+- async function sendTest(userId,deviceId,input){exact(input,['runId','generation','clientEventId']);if(!uuid(input.clientEventId))throw err(400,'invalid_event_id');return db.$transaction(async tx=>{const run=await ownRun(tx,userId,deviceId,input.runId,true,input.generation);await checkRunSession(tx,run);const found=await tx.gameDelivery.findUnique({where:{runId_generation_clientEventId:{runId:run.id,generation:run.generation,clientEventId:input.clientEventId}}});if(found)return{delivery:found};await quota(tx,run,true,1);return{delivery:await enqueue(tx,run,input.clientEventId,'connection_test',null,{})}})}
++ async function sendTest(userId,deviceId,input){exact(input,['runId','generation','clientEventId']);if(!uuid(input.clientEventId))throw err(400,'invalid_event_id');return db.$transaction(async tx=>{const run=await ownRun(tx,userId,deviceId,input.runId,true,input.generation);const server=await checkRunSession(tx,run);const found=await tx.gameDelivery.findUnique({where:{runId_generation_clientEventId:{runId:run.id,generation:run.generation,clientEventId:input.clientEventId}}});if(found)return{delivery:found};await quota(tx,run,true,1);return{delivery:await enqueue(tx,run,input.clientEventId,'connection_test',null,{},server)}})}
+  function validateEvent(event,test){
+   exact(event,test?['runId','generation','clientEventId','ruleIndex','tiktokUsername','robloxUsername','quantity','count','comment','diamondTotal']:['clientEventId','eventType','userId','tiktokUsername','tiktokDisplayName','robloxUsername','giftId','quantity','count','comment','diamondTotal','tiktokAvatarUrl','finalized','providerRoomId','providerGiftId']);
+   if(!uuid(event.clientEventId))throw err(400,'invalid_event_id');
+@@ -137,13 +138,12 @@
+   if(event.comment!==undefined&&(typeof event.comment!=='string'||event.comment.length>500))throw err(400,'invalid_comment');
+   if(event.diamondTotal!==undefined&&(!Number.isSafeInteger(event.diamondTotal)||event.diamondTotal<0))throw err(400,'invalid_diamonds');
+  }
+- async function viewerEvent(tx,run,event,test,resolved){
++ async function viewerEvent(tx,run,event,test,resolved,server){
+   const found=await tx.gameDelivery.findUnique({where:{runId_generation_clientEventId:{runId:run.id,generation:run.generation,clientEventId:event.clientEventId}}});if(found)return found;
+   let sourceKey;
+   if(!test&&run.defaultsSnapshot&&event.eventType==='gift'){
+    if(event.finalized!==true||!id(event.providerRoomId)||typeof event.providerGiftId!=='string'||!/^(group|message):[A-Za-z0-9_-]{1,100}$/.test(event.providerGiftId)||!id(event.giftId))throw err(400,'gift_identity_missing');
+    if(!Number.isInteger(event.quantity)||event.quantity<1||event.quantity>10000)throw err(400,'invalid_quantity');
+-   const server=await tx.gameServerSession.findUnique({where:{id:run.serverSessionId}});
+    if(server.giftSource!=='tikkies')throw err(409,server.giftSource==='direct'?'direct_live_active':'gift_source_unconfirmed');
+    sourceKey=hashToken(JSON.stringify([event.providerRoomId,event.userId,event.giftId,event.providerGiftId]));
+    const receipt=await tx.gameGiftReceipt.findUnique({where:{userId_universeId_sourceKey:{userId:run.userId,universeId:UNIVERSE,sourceKey}}});
+@@ -159,7 +159,7 @@
+    if(!resolved)throw err(400,'invalid_viewer');
+    if(!viewer&&(await tx.gameViewer.count({where:{runId:run.id}}))>=10000)throw err(429,'viewer_limit');
+    await tx.gameViewer.upsert({where:selector,create:{runId:run.id,actorKey,namespace:test?'test':'live',robloxId:resolved.userId,robloxUsername:resolved.username,counters:{...viewer?.counters,joinEventId:event.clientEventId,...portrait}},update:{robloxId:resolved.userId,robloxUsername:resolved.username,joinedAt:null,counters:{...viewer?.counters,joinEventId:event.clientEventId,...portrait}}});
+-   return enqueue(tx,run,event.clientEventId,'join',actorKey,{namespace:test?'test':'live',tiktokUsername:event.tiktokUsername,robloxId:resolved.userId,robloxUsername:resolved.username,effects:[],...portrait});
++   return enqueue(tx,run,event.clientEventId,'join',actorKey,{namespace:test?'test':'live',tiktokUsername:event.tiktokUsername,robloxId:resolved.userId,robloxUsername:resolved.username,effects:[],...portrait},server);
+   }
+   if(!viewer?.joinedAt)throw err(409,'viewer_not_joined');
+   if(test&&viewer.robloxId!==resolved?.userId)throw err(409,'viewer_binding_changed');
+@@ -176,48 +176,102 @@
+    }else{const effect=applyRule(r,candidate,counters,run.rules.indexOf(r),clock());if(effect)effects.push(effect);}
+   }
+   if(JSON.stringify(counters)!==JSON.stringify(viewer.counters))await tx.gameViewer.update({where:selector,data:{counters}});
+-  const delivery=await enqueue(tx,run,event.clientEventId,type,actorKey,{namespace:test?'test':'live',tiktokUsername:event.tiktokUsername,robloxId:viewer.robloxId,robloxUsername:viewer.robloxUsername,effects,...portrait,...(type==='chat'?{comment:event.comment}:{}),...(type==='gift'?{giftId:test?rule.giftId:event.giftId,quantity:event.quantity}:{})});
++  const delivery=await enqueue(tx,run,event.clientEventId,type,actorKey,{namespace:test?'test':'live',tiktokUsername:event.tiktokUsername,robloxId:viewer.robloxId,robloxUsername:viewer.robloxUsername,effects,...portrait,...(type==='chat'?{comment:event.comment}:{}),...(type==='gift'?{giftId:test?rule.giftId:event.giftId,quantity:event.quantity}:{})},server);
+   if(sourceKey)await tx.gameGiftReceipt.create({data:{userId:run.userId,universeId:UNIVERSE,sourceKey,deliveryId:delivery.id,runId:run.id,generation:run.generation}});
+   return delivery;
+  }
+- async function simulateViewer(userId,deviceId,input){validateEvent(input,true);const resolved=await resolve(input.robloxUsername);return db.$transaction(async tx=>{const run=await ownRun(tx,userId,deviceId,input.runId,true,input.generation);await checkRunSession(tx,run);const found=await tx.gameDelivery.findUnique({where:{runId_generation_clientEventId:{runId:run.id,generation:run.generation,clientEventId:input.clientEventId}}});if(found)return{delivery:found};await quota(tx,run,true,1);return{delivery:await viewerEvent(tx,run,input,true,resolved)}})}
++ async function simulateViewer(userId,deviceId,input){validateEvent(input,true);const resolved=await resolve(input.robloxUsername);return db.$transaction(async tx=>{const run=await ownRun(tx,userId,deviceId,input.runId,true,input.generation);const server=await checkRunSession(tx,run);const found=await tx.gameDelivery.findUnique({where:{runId_generation_clientEventId:{runId:run.id,generation:run.generation,clientEventId:input.clientEventId}}});if(found)return{delivery:found};await quota(tx,run,true,1);return{delivery:await viewerEvent(tx,run,input,true,resolved,server)}})}
+  async function submitViewerEvents(userId,deviceId,input){exact(input,['runId','generation','events']);if(!Array.isArray(input.events)||!input.events.length||input.events.length>32)throw err(400,'invalid_events');
+   input.events.forEach(e=>validateEvent(e,false));const resolved=await Promise.all(input.events.map(e=>e.eventType==='join'&&robloxName(e.robloxUsername)?resolve(e.robloxUsername):null));
+-  return db.$transaction(async tx=>{const run=await ownRun(tx,userId,deviceId,input.runId,true,input.generation);await checkRunSession(tx,run);await quota(tx,run,false,input.events.length);const deliveries=[],errors=[];for(let i=0;i<input.events.length;i++){
++  return db.$transaction(async tx=>{const run=await ownRun(tx,userId,deviceId,input.runId,true,input.generation);const server=await checkRunSession(tx,run);await quota(tx,run,false,input.events.length);const deliveries=[],errors=[];for(let i=0;i<input.events.length;i++){
+    const savepoint='viewer_'+i;await tx.$executeRawUnsafe('SAVEPOINT '+savepoint);
+-   try{const d=await viewerEvent(tx,run,input.events[i],false,resolved[i]);deliveries.push({id:d.id,status:d.status});await tx.$executeRawUnsafe('RELEASE SAVEPOINT '+savepoint)}
++   try{const d=await viewerEvent(tx,run,input.events[i],false,resolved[i],server);deliveries.push({id:d.id,status:d.status});await tx.$executeRawUnsafe('RELEASE SAVEPOINT '+savepoint)}
+    catch(error){await tx.$executeRawUnsafe('ROLLBACK TO SAVEPOINT '+savepoint);if(!error.status)throw error;errors.push({clientEventId:input.events[i].clientEventId,error:error.code})}
+   }return{deliveries,errors}});
+ 
+  }
+- async function claim(session){return db.$transaction(async tx=>{
++ function validatePollLimit(limit){if(!Number.isInteger(limit)||limit<1||limit>32)throw err(400,'invalid_poll_limit');}
++ async function claim(session,limit=32){
++  validatePollLimit(limit);
++  const cursor=claimCursors.get(session.id)||'';
++  const batch=await db.$transaction(async tx=>{
++   const locked=await tx.$queryRaw`SELECT id FROM "GameServerSession" WHERE id=${session.id} AND "tokenHash"=${session.tokenHash} FOR UPDATE SKIP LOCKED`;
++   if(!locked.length)return[];
++   const leased=await tx.gameDelivery.count({where:{serverSessionId:session.id,status:'leased',receiptUntil:{gt:now()},expiresAt:{gt:now()}}});
++   const capacity=Math.max(0,Math.min(limit,32-leased));if(!capacity)return[];
+   // Prisma Date parameters are timestamptz; stored DateTime columns contain UTC without a timezone.
+-  const deliveries=await tx.$queryRaw`SELECT d.* FROM "GameDelivery" d
++  const deliveries=await tx.$queryRaw`WITH eligible AS (SELECT d.id,s."receiptCacheV2" AS receiver_cache_v2,ROW_NUMBER() OVER (PARTITION BY d."ownerRobloxId" ORDER BY d."createdAt",d.id) AS owner_rank FROM "GameDelivery" d
+    JOIN "GameRun" r ON r.id=d."runId" JOIN "Game" g ON g.id=r."gameId"
+    JOIN "GameServerSession" s ON s.id=d."serverSessionId" JOIN "GameCredential" c ON c.id=s."credentialId"
+    WHERE s.id=${session.id} AND s."tokenHash"=${session.tokenHash} AND s."closedAt" IS NULL AND s."expiresAt">(${now()} AT TIME ZONE 'UTC') AND c."revokedAt" IS NULL
+    AND s."universeId"=g."universeId" AND g."placeIdsJson"::jsonb @> to_jsonb(s."placeId")
+    AND s.players @> jsonb_build_array(d."ownerRobloxId")
+    AND d."expiresAt">(${now()} AT TIME ZONE 'UTC') AND d.status IN ('pending','leased') AND (d."receiptUntil" IS NULL OR d."receiptUntil"<=(${now()} AT TIME ZONE 'UTC'))
++   AND NOT EXISTS (SELECT 1 FROM "GameDelivery" previous
++    WHERE previous."serverSessionId"=d."serverSessionId" AND previous."runId"=d."runId" AND previous.generation=d.generation
++    AND previous."ownerRobloxId"=d."ownerRobloxId" AND previous."actorKey" IS NOT DISTINCT FROM d."actorKey"
++    AND previous.status IN ('pending','leased') AND previous."expiresAt">(${now()} AT TIME ZONE 'UTC')
++    AND (previous."createdAt",previous.id)<(d."createdAt",d.id)
++    AND (d."eventType"='join' OR previous."eventType"='join'
++      OR (previous.status='leased' AND previous."receiptUntil">(${now()} AT TIME ZONE 'UTC'))))
+    AND (g."universeId"<>${UNIVERSE} OR r."defaultsSnapshot" IS NOT NULL)
+    AND r.generation=d.generation AND r.state='ready' AND r."closedAt" IS NULL AND r."validUntil">(${now()} AT TIME ZONE 'UTC') AND g.active=true AND g.version=r.version
+-   ORDER BY d."createdAt",d.id LIMIT 32 FOR UPDATE OF d SKIP LOCKED`;
+-  const result=[];for(const d of deliveries){const receipt=issueToken();await tx.gameDelivery.update({where:{id:d.id},data:{status:'leased',receiptHash:hashToken(receipt),receiptUntil:new Date(clock()+5000)}});result.push({id:d.id,runId:d.runId,generation:d.generation,ownerRobloxId:d.ownerRobloxId,actorKey:d.actorKey,eventType:d.eventType,payload:d.payload,expiresAt:d.expiresAt,receipt});}return result;
+- });}
+- async function pollTests(session,signal){
++   ) SELECT d.*,e.receiver_cache_v2 FROM "GameDelivery" d JOIN eligible e ON e.id=d.id
++   ORDER BY e.owner_rank,CASE WHEN d."ownerRobloxId">${cursor} THEN 0 ELSE 1 END,d."ownerRobloxId",d."createdAt",d.id LIMIT ${capacity} FOR UPDATE OF d SKIP LOCKED`;
++  const result=[];for(const d of deliveries){const receipt=issueToken();await tx.gameDelivery.update({where:{id:d.id},data:{status:'leased',receiptHash:hashToken(receipt),receiptUntil:new Date(clock()+(d.receiver_cache_v2?20000:5000))}});result.push({id:d.id,runId:d.runId,generation:d.generation,ownerRobloxId:d.ownerRobloxId,actorKey:d.actorKey,eventType:d.eventType,payload:d.payload,expiresAt:d.expiresAt,receipt});}return result;
++  });
++  if(batch.length){
++   // The cursor is advisory; authorization and delivery leases remain durable in SQL.
++   claimCursors.delete(session.id);claimCursors.set(session.id,batch[batch.length-1].ownerRobloxId);
++   if(claimCursors.size>1000)claimCursors.delete(claimCursors.keys().next().value);
++  }
++  return batch;
++ }
++ async function pollTests(session,signal,limit=32){
++  validatePollLimit(limit);
+   if(waiting>=100||polling.has(session.id))throw err(429,'poll_busy');
+   waiting++;polling.add(session.id);const pollToken=issueToken();
+-  try{await db.$transaction(async tx=>{const row=await currentSession(tx,session,true);if(row.pollUntil&&row.pollUntil>now())throw err(429,'poll_busy');await tx.gameServerSession.update({where:{id:row.id},data:{pollToken,pollUntil:new Date(clock()+pollMs+5000)}})});const end=clock()+pollMs;while(!signal?.aborted){const batch=await claim(session);if(batch.length)return{deliveries:batch};if(clock()>=end)break;await new Promise(resolve=>{const done=()=>{clearTimeout(t);signal?.removeEventListener('abort',done);resolve()};const t=setTimeout(done,checkMs);signal?.addEventListener('abort',done,{once:true})})}return{deliveries:[]};}
++  try{await db.$transaction(async tx=>{const row=await currentSession(tx,session,true);if(row.pollUntil&&row.pollUntil>now())throw err(429,'poll_busy');await tx.gameServerSession.update({where:{id:row.id},data:{pollToken,pollUntil:new Date(clock()+pollMs+5000)}})});const end=clock()+pollMs;while(!signal?.aborted){const batch=await claim(session,limit);if(batch.length)return{deliveries:batch};if(clock()>=end)break;await new Promise(resolve=>{const done=()=>{clearTimeout(t);signal?.removeEventListener('abort',done);resolve()};const t=setTimeout(done,checkMs);signal?.addEventListener('abort',done,{once:true})})}return{deliveries:[]};}
+   finally{waiting--;polling.delete(session.id);await db.gameServerSession.updateMany({where:{id:session.id,pollToken},data:{pollToken:null,pollUntil:null}})}
+  }
+- async function ackTest(session,input){exact(input,['eventId','receipt','ok','error']);if(typeof input.receipt!=='string'||typeof input.ok!=='boolean'||(input.error!==undefined&&(typeof input.error!=='string'||!/^[a-z_]{1,64}$/.test(input.error))))throw err(400,'invalid_ack');return db.$transaction(async tx=>{
+-  const current=await currentSession(tx,session,true);await tx.$queryRaw`SELECT id FROM "GameDelivery" WHERE id=${input.eventId} AND "serverSessionId"=${current.id} FOR UPDATE`;const d=await tx.gameDelivery.findFirst({where:{id:input.eventId,serverSessionId:current.id},include:{run:true}});
+-  if(!d)throw err(404,'delivery_not_found');if(!d.receiptHash||hashToken(input.receipt)!==d.receiptHash)throw err(409,'invalid_receipt');
+-  if(['succeeded','failed'].includes(d.status))return{ok:true};
+-  if(d.expiresAt<=now()||d.receiptUntil<=now()||d.run.closedAt||d.run.state!=='ready'||d.run.validUntil<=now()||current.game.version!==d.run.version||d.generation!==d.run.generation||!current.players.includes(d.ownerRobloxId))throw err(409,'delivery_expired');
+-  await tx.gameDelivery.update({where:{id:d.id},data:{status:input.ok?'succeeded':'failed',ackedAt:now(),result:input.ok?'ok':input.error||'handler_failed'}});
+-  if(d.eventType==='join'&&input.ok)await tx.gameViewer.updateMany({where:{runId:d.runId,actorKey:d.actorKey,robloxId:d.payload.robloxId,counters:{path:['joinEventId'],equals:d.clientEventId}},data:{joinedAt:now()}});return{ok:true};
+- });}
+- return{startRun,heartbeatRun,stopRun,getRun,sendTest,simulateViewer,submitViewerEvents,registerServer,heartbeatServer,pollTests,ackTest,closeServer,claim};
++ function validateAck(input){
++  exact(input,['eventId','receipt','ok','error']);
++  if(typeof input.eventId!=='string'||!input.eventId||input.eventId.length>200||typeof input.receipt!=='string'||typeof input.ok!=='boolean'||(input.error!==undefined&&(typeof input.error!=='string'||!/^[a-z_]{1,64}$/.test(input.error))))throw err(400,'invalid_ack');
++ }
++ async function acknowledge(session,receipts){
++  receipts.forEach(validateAck);
++  return db.$transaction(async tx=>{
++   const current=await currentSession(tx,session,true),locked=new Map();
++   // Lock in a consistent order, then authorize every item before writing any ACK.
++   for(const eventId of [...new Set(receipts.map(item=>item.eventId))].sort()){
++    await tx.$queryRaw`SELECT id FROM "GameDelivery" WHERE id=${eventId} AND "serverSessionId"=${current.id} FOR UPDATE`;
++    locked.set(eventId,await tx.gameDelivery.findFirst({where:{id:eventId,serverSessionId:current.id},include:{run:true}}));
++   }
++   for(const input of receipts){
++    const d=locked.get(input.eventId);
++    if(!d)throw err(404,'delivery_not_found');
++    if(!d.receiptHash||hashToken(input.receipt)!==d.receiptHash)throw err(409,'invalid_receipt');
++    if(['succeeded','failed'].includes(d.status))continue;
++    if(d.expiresAt<=now()||d.receiptUntil<=now()||d.run.closedAt||d.run.state!=='ready'||d.run.validUntil<=now()||current.game.version!==d.run.version||d.generation!==d.run.generation||!current.players.includes(d.ownerRobloxId))throw err(409,'delivery_expired');
++   }
++   const completed=new Set();
++   for(const input of receipts){
++    const d=locked.get(input.eventId);
++    if(completed.has(d.id)||['succeeded','failed'].includes(d.status))continue;
++    completed.add(d.id);
++    await tx.gameDelivery.update({where:{id:d.id},data:{status:input.ok?'succeeded':'failed',ackedAt:now(),result:input.ok?'ok':input.error||'handler_failed'}});
++    if(d.eventType==='join'&&input.ok)await tx.gameViewer.updateMany({where:{runId:d.runId,actorKey:d.actorKey,robloxId:d.payload.robloxId,counters:{path:['joinEventId'],equals:d.clientEventId}},data:{joinedAt:now()}});
++   }
++   return{results:receipts.map(input=>({eventId:input.eventId,ok:true}))};
++  });
++ }
++ async function ackTest(session,input){await acknowledge(session,[input]);return{ok:true};}
++ async function ackBatch(session,input){
++  exact(input,['receipts']);
++  if(!Array.isArray(input.receipts)||input.receipts.length<1||input.receipts.length>32)throw err(400,'invalid_ack');
++  return acknowledge(session,input.receipts);
++ }
++
++ return{startRun,heartbeatRun,stopRun,getRun,sendTest,simulateViewer,submitViewerEvents,registerServer,heartbeatServer,pollTests,ackTest,ackBatch,closeServer,claim};
+ }
+ module.exports={createRuntime};
+--- a/server/src/gameRuntimeRoutes.js
++++ b/server/src/gameRuntimeRoutes.js
+@@ -1,7 +1,7 @@
+ const express=require('express');
+ const {wrapAsync}=require('./asyncRouter');
+ const {requireAuth,requireLiveDevice}=require('./middleware');
+-const {readGameSession,bearer,exact}=require('./gameRuntimeAuth');
++const {readGameSession,bearer,exact,runtimeError}=require('./gameRuntimeAuth');
+ const {rateLimit}=require('./rateLimit');
+ function createRuntimeRoutes({runtime=require('./gameRuntime').createRuntime(),db=require('./db'),auth=[requireAuth,requireLiveDevice]}={}){
+  const router=wrapAsync(express.Router());
+@@ -12,9 +12,10 @@
+  router.use('/server',async(req,_res,next)=>{req.gameSession=await readGameSession(req,db);next()});
+  router.post('/server/heartbeat',async(req,res)=>res.json(await runtime.heartbeatServer(req.gameSession,req.body)));
+  router.post('/server/poll',async(req,res)=>{
+-  exact(req.body,[]);const controller=new AbortController();const abort=()=>controller.abort();res.once('close',abort);
+-  try{const result=await runtime.pollTests(req.gameSession,controller.signal);if(!controller.signal.aborted)res.json(result)}finally{res.off('close',abort)}
++  exact(req.body,['limit']);if(req.body.limit!==undefined&&(!Number.isInteger(req.body.limit)||req.body.limit<1||req.body.limit>32))throw runtimeError(400,'invalid_poll_limit');const controller=new AbortController();const abort=()=>controller.abort();res.once('close',abort);
++  try{const result=await runtime.pollTests(req.gameSession,controller.signal,req.body.limit);if(!controller.signal.aborted)res.json(result)}finally{res.off('close',abort)}
+  });
++ router.post('/server/ack-batch',async(req,res)=>res.json(await runtime.ackBatch(req.gameSession,req.body)));
+  router.post('/server/ack',async(req,res)=>res.json(await runtime.ackTest(req.gameSession,req.body)));
+  router.post('/server/close',async(req,res)=>{exact(req.body,[]);res.json(await runtime.closeServer(req.gameSession))});
+  router.use(...auth);
+--- a/server/src/gameRuntime.test.js
++++ b/server/src/gameRuntime.test.js
+@@ -19,8 +19,10 @@
+  await assert.rejects(()=>rt.startRun('alice','a',{...input,userId:'bob'}),/invalid_input/);
+  let run=await rt.startRun('alice','a',input);assert.equal(run.state,'waiting');
+  await assert.rejects(()=>rt.startRun('alice','b',input),/run_in_use/);
+- let registered=await rt.registerServer(token,{universeId:'1',placeId:'2',jobId:'jobA',instanceNonce:'a'.repeat(32),players:['42']});
++ let registered=await rt.registerServer(token,{universeId:'1',placeId:'2',jobId:'jobA',instanceNonce:'a'.repeat(32),players:['42'],capabilities:{batchAck:true,receiptCacheV2:true}});
++ assert.deepEqual(registered.capabilities,{batchAck:true,boundedPipeline:true});
+  let session=await readGameSession({headers:{authorization:'Bearer '+registered.token}},db);
++ assert.equal(session.receiptCacheV2,true,'The receiver cache capability is persisted on its server session');
+  assert.equal(session.quotaAt.getTime(),now,'Registration uses the runtime UTC clock for its quota window');
+  await db.gameServerSession.update({where:{id:session.id},data:{quotaAt:new Date(now+7*3600000),quotaCount:200}});
+  await rt.heartbeatServer(session,{players:['42']});
+@@ -41,8 +43,84 @@
+  const foreign=await rt.registerServer(token,{universeId:'1',placeId:'2',jobId:'foreign',instanceNonce:'c'.repeat(32),players:['99']});
+  const foreignSession=await readGameSession({headers:{authorization:'Bearer '+foreign.token}},db);
+  await assert.rejects(()=>rt.ackTest(foreignSession,{eventId:claimed[0].id,receipt:claimed[0].receipt,ok:true}),/delivery_not_found/);
++ now+=10000;
+  await rt.ackTest(session,{eventId:claimed[0].id,receipt:claimed[0].receipt,ok:true});
+  await rt.ackTest(session,{eventId:claimed[0].id,receipt:claimed[0].receipt,ok:true});
++ // A busy broadcaster must not hide another broadcaster behind its queue.
++ await rt.heartbeatServer(session,{players:['42','43']});
++ const otherRun=await db.gameRun.create({data:{userId:'bob',deviceId:'b',gameId:game.id,accountId:'43',generation:crypto.randomUUID(),state:'ready',version:1,validUntil:new Date(now+60000),serverSessionId:session.id,rules:[]}});
++ const fairIds=Array.from({length:41},()=>crypto.randomUUID());
++ await db.gameDelivery.createMany({data:fairIds.map((id,index)=>({id,runId:index===40?otherRun.id:run.id,generation:index===40?otherRun.generation:run.generation,serverSessionId:session.id,ownerRobloxId:index===40?'43':'42',actorKey:'live:fair-'+index,eventType:'chat',payload:{},clientEventId:id,createdAt:new Date(now+index),expiresAt:new Date(now+120000)}))});
++ const firstSlice=await rt.claim(session,7);assert.equal(firstSlice.length,7,'Poll capacity limits the first lease slice');
++ const remainingSlice=await rt.claim(session,32);assert.equal(remainingSlice.length,25,'All live leases across polls are bounded at32');
++ assert.equal((await rt.claim(session,32)).length,0,'No additional deliveries are claimed until a lease is acknowledged');
++ const fair=[...firstSlice,...remainingSlice];
++ assert.equal(fair.length,32);assert.ok(fair.some(d=>d.ownerRobloxId==='43'),'A second owner gets the first batch despite an older 40-event queue');
++ assert.deepEqual(fair.filter(d=>d.ownerRobloxId==='42').map(d=>d.id),fairIds.slice(0,31),'Fairness preserves each owner delivery order');
++ const receipts=fair.map(d=>({eventId:d.id,receipt:d.receipt,ok:true}));
++ await assert.rejects(()=>rt.ackBatch(foreignSession,{receipts}),/delivery_not_found/);
++ await assert.rejects(()=>rt.ackBatch(session,{receipts:[receipts[0],{...receipts[1],receipt:'forged'}]}),/invalid_receipt/);
++ assert.equal((await db.gameDelivery.findUnique({where:{id:fair[0].id}})).status,'leased','A later invalid batch item cannot commit the first valid ACK');
++ const quotaBefore=(await db.gameServerSession.findUnique({where:{id:session.id}})).quotaCount;
++ await rt.ackBatch(session,{receipts:fair.map(d=>({eventId:d.id,receipt:d.receipt,ok:true}))});
++ assert.equal((await db.gameServerSession.findUnique({where:{id:session.id}})).quotaCount,quotaBefore+1,'32 real database ACKs consume one HTTP request quota');
++ await db.gameDelivery.deleteMany({where:{id:{in:fairIds}}});await db.gameRun.delete({where:{id:otherRun.id}});
++ await rt.heartbeatServer(session,{players:['42']});
++ const concurrentIds=Array.from({length:36},()=>crypto.randomUUID());
++ await db.gameDelivery.createMany({data:concurrentIds.map((id,index)=>({id,runId:run.id,generation:run.generation,serverSessionId:session.id,ownerRobloxId:'42',actorKey:'live:concurrent-'+index,eventType:'chat',payload:{},clientEventId:id,createdAt:new Date(now+index),expiresAt:new Date(now+120000)}))});
++ const concurrentClaims=(await Promise.all(Array.from({length:4},()=>rt.claim(session,32)))).flat();
++ assert.equal(concurrentClaims.length,32,'Concurrent polls share the same32-lease allowance');
++ assert.equal(new Set(concurrentClaims.map(d=>d.id)).size,32,'Concurrent polls cannot duplicate a leased event');
++ assert.equal(await db.gameDelivery.count({where:{id:{in:concurrentIds},status:'leased'}}),32);
++ await rt.ackBatch(session,{receipts:concurrentClaims.map(d=>({eventId:d.id,receipt:d.receipt,ok:true}))});
++ await db.gameDelivery.deleteMany({where:{id:{in:concurrentIds}}});
++ // A leased slow actor does not hide another actor, and its own later event cannot overtake it.
++ const headIds=Array.from({length:3},()=>crypto.randomUUID());
++ await db.gameDelivery.createMany({data:headIds.map((id,index)=>({id,runId:run.id,generation:run.generation,serverSessionId:session.id,ownerRobloxId:'42',actorKey:index===2?'live:ready':'live:slow',eventType:'chat',payload:{},clientEventId:id,createdAt:new Date(now+index),expiresAt:new Date(now+120000)}))});
++ const slowHead=await rt.claim(session,1);assert.equal(slowHead[0].id,headIds[0]);
++ const readyHead=await rt.claim(session,1);assert.equal(readyHead[0].id,headIds[2],'Another actor is delivered before the slow head is acknowledged');
++ await rt.ackBatch(session,{receipts:readyHead.map(d=>({eventId:d.id,receipt:d.receipt,ok:true}))});
++ assert.equal((await rt.claim(session,1)).length,0,'A later event waits for its own actor predecessor');
++ await rt.ackTest(session,{eventId:slowHead[0].id,receipt:slowHead[0].receipt,ok:true});
++ const following=await rt.claim(session,1);assert.equal(following[0].id,headIds[1]);
++ await rt.ackTest(session,{eventId:following[0].id,receipt:following[0].receipt,ok:true});
++ await db.gameDelivery.deleteMany({where:{id:{in:headIds}}});
++ // A busy viewer can upload a whole effect prefix instead of paying one poll/ACK per effect.
++ const prefixIds=Array.from({length:33},()=>crypto.randomUUID());
++ await db.gameDelivery.createMany({data:prefixIds.map((id,index)=>({id,runId:run.id,generation:run.generation,serverSessionId:session.id,ownerRobloxId:'42',actorKey:'live:prefix',eventType:'gift',payload:{effects:[{key:'power',value:1,count:1}]},clientEventId:id,createdAt:new Date(now+index),expiresAt:new Date(now+120000)}))});
++ const prefix=await rt.claim(session,32);assert.deepEqual(prefix.map(d=>d.id),prefixIds.slice(0,32),'32 ordered effects can share one claim and batch ACK');
++ assert.equal((await rt.claim(session,32)).length,0,'A live leased prefix blocks its later actor events');
++ await rt.ackBatch(session,{receipts:prefix.map(d=>({eventId:d.id,receipt:d.receipt,ok:true}))});
++ const tail=await rt.claim(session,32);assert.deepEqual(tail.map(d=>d.id),prefixIds.slice(32));await rt.ackBatch(session,{receipts:tail.map(d=>({eventId:d.id,receipt:d.receipt,ok:true}))});
++ await db.gameDelivery.deleteMany({where:{id:{in:prefixIds}}});
++ const barrierTypes=['gift','join','gift','gift','join','gift'],barrierIds=barrierTypes.map(()=>crypto.randomUUID());
++ await db.gameDelivery.createMany({data:barrierIds.map((id,index)=>({id,runId:run.id,generation:run.generation,serverSessionId:session.id,ownerRobloxId:'42',actorKey:'live:barrier',eventType:barrierTypes[index],payload:{robloxId:'101'},clientEventId:id,createdAt:new Date(now+index),expiresAt:new Date(now+120000)}))});
++ for(const expected of [[0],[1],[2,3],[4],[5]]){
++  const batch=await rt.claim(session,32);assert.deepEqual(batch.map(d=>d.id),expected.map(index=>barrierIds[index]),'Joins remain ACK barriers between same-actor effect prefixes');
++  await rt.ackBatch(session,{receipts:batch.map(d=>({eventId:d.id,receipt:d.receipt,ok:true}))});
++ }
++ await db.gameDelivery.deleteMany({where:{id:{in:barrierIds}}});
++ // More active owners than one batch also rotate; recalculating rank alone would starve the last owners.
++ const rotationOwners=Array.from({length:40},(_,index)=>({userId:'fair-owner-'+index,accountId:String(1000+index),runId:'fair-run-'+index,generation:crypto.randomUUID()}));
++ await db.user.createMany({data:rotationOwners.map(owner=>({id:owner.userId}))});
++ try{
++  await db.gameRun.createMany({data:rotationOwners.map(owner=>({id:owner.runId,userId:owner.userId,deviceId:'fair-device',gameId:game.id,accountId:owner.accountId,generation:owner.generation,state:'ready',version:1,validUntil:new Date(now+60000),serverSessionId:session.id,rules:[]}))});
++  await rt.heartbeatServer(session,{players:['42',...rotationOwners.map(owner=>owner.accountId)]});
++  await db.gameDelivery.createMany({data:rotationOwners.flatMap((owner,index)=>Array.from({length:2},(_,packet)=>({runId:owner.runId,generation:owner.generation,serverSessionId:session.id,ownerRobloxId:owner.accountId,actorKey:'live:fair',eventType:'chat',payload:{},clientEventId:crypto.randomUUID(),createdAt:new Date(now+index*100+packet),expiresAt:new Date(now+120000)})))});
++  const visited=new Set();
++  for(let batch=0;batch<2;batch++){
++   const packets=await rt.claim(session);for(const packet of packets)visited.add(packet.ownerRobloxId);
++   await rt.ackBatch(session,{receipts:packets.map(packet=>({eventId:packet.id,receipt:packet.receipt,ok:true}))});
++  }
++  assert.equal(visited.size,40,'All 40 owners get service within two batches despite older per-owner backlogs');
++ }finally{await db.user.deleteMany({where:{id:{in:rotationOwners.map(owner=>owner.userId)}}});await rt.heartbeatServer(session,{players:['42']});}
++ await db.gameRun.update({where:{id:run.id},data:{quotaAt:new Date(now),liveRequests:159,liveEvents:0}});
++ const quotaProbe=()=>rt.submitViewerEvents('alice','a',{runId:run.id,generation:run.generation,events:[{clientEventId:crypto.randomUUID(),eventType:'join',userId:'555',tiktokUsername:'QuotaViewer',robloxUsername:'Viewer_A'}]});
++ const admitted=await quotaProbe();assert.equal(admitted.deliveries.length,1,'The faster Desktop may submit its 160th request');
++ await assert.rejects(quotaProbe,/event_rate_limited/);
++ await db.gameDelivery.deleteMany({where:{id:{in:admitted.deliveries.map(item=>item.id)}}});await db.gameViewer.deleteMany({where:{runId:run.id,actorKey:'live:555'}});
++ await db.gameRun.update({where:{id:run.id},data:{liveRequests:0,liveEvents:1200}});await assert.rejects(quotaProbe,/event_rate_limited/);
++ await db.gameRun.update({where:{id:run.id},data:{liveRequests:0,liveEvents:0}});
+  const eventId=crypto.randomUUID(),gift=await simulate({clientEventId:eventId,ruleIndex:0,quantity:2});
+  assert.equal((await db.gameDelivery.findUnique({where:{id:join.delivery.id}})).payload.robloxId,'101','Quota cleanup retains recent payloads regardless of database timezone');
+  assert.equal((await simulate({clientEventId:eventId,ruleIndex:0,quantity:2})).delivery.id,gift.delivery.id);
+@@ -63,13 +141,14 @@
+  for(const d of inherited)await rt.ackTest(session,{eventId:d.id,receipt:d.receipt,ok:true});
+  for(const bad of [null,12,'x'.repeat(101),'bad\u0000name']){await assert.rejects(()=>live([{eventType:'like',userId:'123',count:1,tiktokDisplayName:bad}]),/invalid_display_name/);}
+  for(const field of ['streamerTikTokUserId','streamerTikTokUsername']){await assert.rejects(()=>live([{eventType:'chat',userId:'123',comment:'hello',[field]:'spoof'}]),/invalid_input/,'Desktop assertions cannot become authoritative broadcaster metadata');}
+- now+=6000;deliveries=await rt.claim(session);assert.equal(deliveries[0].id,gift.delivery.id);await assert.rejects(()=>rt.ackTest(session,{eventId:gift.delivery.id,receipt:'invalid',ok:true}),/invalid_receipt/);
++ now+=21000;deliveries=await createRuntime({db,catalog,clock}).claim(session);assert.equal(deliveries[0].id,gift.delivery.id);await assert.rejects(()=>rt.ackTest(session,{eventId:gift.delivery.id,receipt:'invalid',ok:true}),/invalid_receipt/);
+  const ackRace=await rt.sendTest('alice','a',{runId:run.id,generation:run.generation,clientEventId:crypto.randomUUID()});
+  const ackPacket=(await rt.claim(session)).find(d=>d.id===ackRace.delivery.id);let intercepted,unblock,holdAck=true;
+  db.$use(async(params,next)=>{if(holdAck&&params.model==='GameDelivery'&&params.action==='update'&&params.args.data.status==='succeeded'){holdAck=false;intercepted?.();await new Promise(r=>unblock=r)}return next(params)});
+- const reached=new Promise(r=>intercepted=r);const ackPromise=rt.ackTest(session,{eventId:ackPacket.id,receipt:ackPacket.receipt,ok:true});await reached;now+=6000;
++ const reached=new Promise(r=>intercepted=r);const ackPromise=rt.ackTest(session,{eventId:ackPacket.id,receipt:ackPacket.receipt,ok:true});await reached;now+=21000;
+  const interleaved=await rt.claim(session);unblock();await ackPromise;
+  assert.equal(interleaved.some(d=>d.id===ackPacket.id),false,'ACK locks its receipt until validation and update finish');
++ await rt.heartbeatServer(session,{players:['42']});
+  const second=await rt.registerServer(token,{universeId:'1',placeId:'2',jobId:'jobB',instanceNonce:'b'.repeat(32),players:['42']});
+  await rt.stopRun('alice','a',run.id,run.generation);run=await rt.startRun('alice','a',input);assert.equal(run.state,'waiting');assert.equal(run.servers.length,2);
+  await rt.stopRun('alice','a',run.id,run.generation);run=await rt.startRun('alice','a',{...input,serverId:registered.id});assert.equal(run.state,'ready');
+@@ -79,6 +158,24 @@
+  for(let i=0;i<6;i++){now+=20000;await rt.heartbeatServer(session,{players:['42']});run=await rt.heartbeatRun('alice','a',run.id,run.generation);assert.equal(run.state,'ready','Healthy game runs renew across multiple cache deadlines');}
+  await rt.sendTest('alice','a',{runId:run.id,generation:run.generation,clientEventId:crypto.randomUUID()});
+  assert.equal((await rt.sendTest('alice','a',{runId:run.id,generation:run.generation,clientEventId:retainedId})).delivery.id,retained.delivery.id,'UUID dedup survives payload cleanup for the whole generation');
++ // Legacy receivers never opt into a lifetime longer than their old deduplication cache.
++ const legacyRegistered=await rt.registerServer(token,{universeId:'1',placeId:'2',jobId:'legacy',instanceNonce:'l'.repeat(32),players:['42']});
++ const legacySession=await readGameSession({headers:{authorization:'Bearer '+legacyRegistered.token}},db);
++ assert.equal(legacySession.receiptCacheV2,false,'Existing receivers default to the legacy contract');
++ await db.gameRun.update({where:{id:run.id},data:{serverSessionId:legacySession.id}});
++ const legacyEvent=event=>rt.submitViewerEvents('alice','a',{runId:run.id,generation:run.generation,events:[{clientEventId:crypto.randomUUID(),tiktokUsername:'LegacyViewer',userId:'444',...event}]});
++ await legacyEvent({eventType:'join',robloxUsername:'Viewer_A'});
++ for(const packet of await rt.claim(legacySession))await rt.ackTest(legacySession,{eventId:packet.id,receipt:packet.receipt,ok:true});
++ const legacyGift=await legacyEvent({eventType:'gift',giftId:'5655',quantity:2});
++ const legacyRow=await db.gameDelivery.findUnique({where:{id:legacyGift.deliveries[0].id}});
++ assert.equal(legacyRow.expiresAt.getTime()-now,15000,'Desktop gifts use the bound legacy receiver lifetime');
++ const restartedLegacy=createRuntime({db,catalog,clock});
++ const legacyPackets=await restartedLegacy.claim(legacySession);assert.equal(legacyPackets.length,1);
++ assert.equal((await db.gameDelivery.findUnique({where:{id:legacyRow.id}})).receiptUntil.getTime()-now,5000,'A backend restart retains the old receipt lease');
++ now+=16000;
++ assert.equal((await restartedLegacy.claim(legacySession)).length,0,'The old paid gift expires before the old receiver forgets it');
++ await db.gameRun.update({where:{id:run.id},data:{serverSessionId:session.id}});
++ await rt.heartbeatServer(session,{players:['42']});run=await rt.heartbeatRun('alice','a',run.id,run.generation);
+  down=true;await assert.rejects(()=>rt.heartbeatRun('alice','a',run.id,run.generation),/store_down/);now+=61000;assert.equal((await rt.claim(session)).length,0);down=false;
+  await rt.stopRun('alice','a',run.id,run.generation);
+  const race=await Promise.allSettled([rt.startRun('alice','device1',input),rt.startRun('alice','device2',input)]);assert.equal(race.filter(x=>x.status==='fulfilled').length,1,'One device acquires the account');
+--- a/server/src/gameRuntimeAuth.js
++++ b/server/src/gameRuntimeAuth.js
+@@ -11,7 +11,11 @@
+  return players;
+ }
+ function validateServerRegistration(input, game) {
+- exact(input,['universeId','placeId','jobId','instanceNonce','players','giftSource']);
++ exact(input,['universeId','placeId','jobId','instanceNonce','players','giftSource','capabilities']);
++ if(input.capabilities!==undefined){
++  exact(input.capabilities,['batchAck','receiptCacheV2']);
++  if(Object.values(input.capabilities).some(value=>typeof value!=='boolean'))throw runtimeError(400,'invalid_input');
++ }
+  if(input.giftSource!==undefined&&!['tikkies','direct'].includes(input.giftSource))throw runtimeError(400,'invalid_gift_source');
+  if(!game?.active || input.universeId!==game.universeId || !JSON.parse(game.placeIdsJson).includes(input.placeId)) throw runtimeError(403,'map_not_allowed');
+  if(!id(input.universeId)||!id(input.placeId)||typeof input.jobId!=='string'||!/^[a-zA-Z0-9_-]{1,128}$/.test(input.jobId)||typeof input.instanceNonce!=='string'||!/^[a-zA-Z0-9_-]{32,64}$/.test(input.instanceNonce)) throw runtimeError(400,'invalid_input');
+--- a/server/src/gameRuntimeAuth.test.js
++++ b/server/src/gameRuntimeAuth.test.js
+@@ -6,6 +6,9 @@
+  const game={id:'g',active:true,universeId:'1',placeIdsJson:'["2"]'};
+  const input={universeId:'1',placeId:'2',jobId:'job',instanceNonce:'a'.repeat(32),players:['42']};
+  assert.deepEqual(auth.validateServerRegistration(input,game), input);
++ const modern={...input,capabilities:{batchAck:true,receiptCacheV2:true}};
++ assert.deepEqual(auth.validateServerRegistration(modern,game),modern);
++ for(const capabilities of [null,[],true,{unknown:true},{batchAck:'yes'},{receiptCacheV2:2}])assert.throws(()=>auth.validateServerRegistration({...input,capabilities},game),'Only explicitly supported boolean capabilities are accepted');
+  for(const value of [{...input,placeId:'3'},{...input,players:['0']},{...input,userId:'foreign'},{...input,players:Array(101).fill('42')}]) assert.throws(()=>auth.validateServerRegistration(value,game));
+  const session={universeId:'1',placeId:'2',expiresAt:new Date(Date.now()+45000),closedAt:null,credential:{revokedAt:null},game};
+  const db={$queryRaw:async()=>[session]};
+--- a/server/prisma/schema.prisma
++++ b/server/prisma/schema.prisma
+@@ -266,6 +266,7 @@
+   tokenHash String @unique
+   jobId String
+   giftSource String?
++  receiptCacheV2 Boolean @default(false)
+   instanceNonce String
+   universeId String
+   placeId String
+--- a/server/package.json
++++ b/server/package.json
+@@ -8,7 +8,7 @@
+   "scripts": {
+     "dev": "node --watch src/index.js",
+     "start": "node src/index.js",
+-    "test": "node src/hyperRunGifts.test.js && node src/gameDefaultsRoutes.test.js && node src/hyperRunRuntime.test.js && node src/asyncRouter.test.js && node src/rateLimit.test.js && node src/store.test.js && node src/authRoutes.test.js && node src/lowFixes.test.js && node src/trial.test.js && node src/presetGroups.test.js && node src/gameEntitlements.test.js && node src/gameCatalog.test.js && node src/gameOverlays.test.js && node src/gameOverlaysRoutes.test.js && node src/gameRuntimeAuth.test.js && node src/gameRuntimeRoutes.test.js && node src/gameRules.test.js && node src/gameRuntime-rejoin.test.js && node src/gameRuntime-state.test.js && node src/gameRuntime.test.js",
++    "test": "node src/hyperRunGifts.test.js && node src/gameDefaultsRoutes.test.js && node src/hyperRunRuntime.test.js && node src/asyncRouter.test.js && node src/rateLimit.test.js && node src/store.test.js && node src/authRoutes.test.js && node src/lowFixes.test.js && node src/trial.test.js && node src/presetGroups.test.js && node src/gameEntitlements.test.js && node src/gameCatalog.test.js && node src/gameOverlays.test.js && node src/gameOverlaysRoutes.test.js && node src/gameRuntimeAuth.test.js && node src/gameRuntimeRoutes.test.js && node src/gameRules.test.js && node src/gameRuntime-batch-ack.test.js && node src/gameRuntime-batch-routes.test.js && node src/gameRuntime-rejoin.test.js && node src/gameRuntime-state.test.js && node src/gameRuntime.test.js",
+     "backfill:emails": "node src/backfillEmails.js",
+     "migrate": "prisma migrate dev",
+     "migrate:deploy": "prisma migrate deploy",
+--- a/src/core/gameRuntime.js
++++ b/src/core/gameRuntime.js
+@@ -4,6 +4,26 @@
+ const {UNIVERSE}=require('./hyperRunGifts');
+ function createGameRuntime({auth,tiktok,games,actions,bus,clock=Date.now}){
+  let current={mode:'ordinary',state:'stopped'},generation=0,startPromise=null,connectionCleanup=null,ownsConnection=false,liveStarting=false,startingOwner=null,heartbeat=null,expiry=null,allowed=false,activeRules=[],activeJoinMode='either',lastFlush=0,queue=[],flushTimer=null,sending=false,disposed=false;
++ const requests=[];
++ let uploadTokens=2,uploadAt=clock();
++ function runtimeWait(operation){
++  const now=clock();while(requests.length&&requests[0].at<=now-60000)requests.shift();
++  const critical=operation==='start'||operation==='stop'||operation==='heartbeat',limit=critical?180:170;
++  let wait=requests.length>=limit?requests[0].at+60000-now:0;
++  if(operation==='events'){
++   uploadTokens=Math.min(2,uploadTokens+Math.max(0,now-uploadAt)/375);uploadAt=now;
++   wait=Math.max(wait,Math.ceil(Math.max(0,1-uploadTokens)*375));
++   const events=requests.filter(row=>row.operation==='events');
++   if(events.length>=160)wait=Math.max(wait,events[0].at+60000-now);
++  }
++  return Math.max(0,wait);
++ }
++ function requestRuntime(operation,body){
++  if(runtimeWait(operation)>0)return Promise.resolve({ok:false,error:'runtime_rate_limited'});
++  if(operation==='events')uploadTokens-=1;
++  requests.push({at:clock(),operation});
++  return auth.gameRuntime(operation,body);
++ }
+  const normalizer=createGameEvents({clock});
+  const pendingTestStops=new Map();
+  let simulation=null;
+@@ -22,7 +42,7 @@
+  }
+  async function closeRun(run){
+   if(run.testing)pendingTestStops.set(run.ownerId,run);
+-  const result=await auth.gameRuntime('stop',{runId:run.id,generation:run.generation}).catch(()=>({ok:false}));
++  const result=await requestRuntime('stop',{runId:run.id,generation:run.generation}).catch(()=>({ok:false}));
+   const confirmed=result?.ok||result?.error==='run_expired';
+   if(confirmed&&pendingTestStops.get(run.ownerId)===run)pendingTestStops.delete(run.ownerId);
+   return confirmed;
+@@ -38,7 +58,7 @@
+  async function stop(error){const old=current,ticket=++generation;clear();current={mode:'ordinary',state:'stopped',...(typeof error==='string'?{error}:{})};const closing=releaseConnection();publish();
+   if(closing){await closing;if(ticket===generation){if(ownsConnection)current.error='tiktok_connection_failed';publish();}}
+   if(old.id)await closeRun(old);return{ok:true,...state()};}
+- async function refresh(ticket){if(ticket!==generation||!current.id)return;try{accept(await auth.gameRuntime('heartbeat',{runId:current.id,generation:current.generation}),ticket)}catch(e){if(ticket===generation){current.error=e.message;publish();/* Retain only the existing lease, never renew on an error. */}}}
++ async function refresh(ticket){if(ticket!==generation||!current.id)return;try{accept(await requestRuntime('heartbeat',{runId:current.id,generation:current.generation}),ticket)}catch(e){if(ticket===generation){current.error=e.message;publish();/* Retain only the existing lease, never renew on an error. */}}}
+  function start(input,testing=false){
+   if(connectionCleanup){const queuedAt=generation,queuedOwner=owner();return connectionCleanup.then(()=>queuedAt===generation&&queuedOwner===owner()?start(input,testing):{ok:false,error:'cancelled'});}
+   if(ownsConnection&&current.mode!=='game')return Promise.resolve({ok:false,error:'tiktok_connection_failed'});
+@@ -79,7 +99,7 @@
+      if(!['connected','connecting','waiting','retrying'].includes(tiktok.getState().status))throw Error('tiktok_connection_failed');
+     }
+     if(ticket!==generation||owner()!==userId)return{ok:false,error:'cancelled'};
+-    const result=await auth.gameRuntime('start',{gameId:game.id,accountId:input.accountId,version:game.version,rules,...(game.universeId===UNIVERSE?{rulesSource:game.profile.rulesSource||'override',defaultsVersion:game.defaultsVersion||null}:{}),...(input.serverId?{serverId:input.serverId}:{})});
++    const result=await requestRuntime('start',{gameId:game.id,accountId:input.accountId,version:game.version,rules,...(game.universeId===UNIVERSE?{rulesSource:game.profile.rulesSource||'override',defaultsVersion:game.defaultsVersion||null}:{}),...(input.serverId?{serverId:input.serverId}:{})});
+     if(ticket!==generation||owner()!==userId){if(result?.id)await closeRun({...result,testing,ownerId:userId});return{ok:false,error:'cancelled'}}
+     accept(result,ticket);heartbeat=setInterval(()=>refresh(ticket),20000);heartbeat.unref?.();return{ok:true,...state()};
+    }catch(e){if(ticket===generation){clear();current={mode:'ordinary',state:'stopped',error:e.message};const closing=releaseConnection();publish();if(closing){await closing;if(ticket===generation)publish();}}return{ok:false,error:e.message}}
+@@ -101,12 +121,12 @@
+   if(simulation)return{ok:false,error:'test_in_progress'};
+   const ticket=generation,runId=current.id,runGeneration=current.generation,marker={};simulation=marker;
+   const valid=()=>ticket===generation&&owner()===current.ownerId;
+-  const send=ruleIndex=>auth.gameRuntime('simulate',{runId,generation:runGeneration,clientEventId:randomUUID(),ruleIndex,tiktokUsername:input.tiktokUsername,robloxUsername:input.robloxUsername,...(ruleIndex!==-1&&input.quantity!==undefined?{quantity:input.quantity}:{}),...(ruleIndex!==-1&&input.count!==undefined?{count:input.count}:{}),...(ruleIndex!==-1&&input.comment!==undefined?{comment:input.comment}:{}),...(ruleIndex!==-1&&input.diamondTotal!==undefined?{diamondTotal:input.diamondTotal}:{})});
++  const send=ruleIndex=>requestRuntime('simulate',{runId,generation:runGeneration,clientEventId:randomUUID(),ruleIndex,tiktokUsername:input.tiktokUsername,robloxUsername:input.robloxUsername,...(ruleIndex!==-1&&input.quantity!==undefined?{quantity:input.quantity}:{}),...(ruleIndex!==-1&&input.count!==undefined?{count:input.count}:{}),...(ruleIndex!==-1&&input.comment!==undefined?{comment:input.comment}:{}),...(ruleIndex!==-1&&input.diamondTotal!==undefined?{diamondTotal:input.diamondTotal}:{})});
+   async function confirmed(result){
+    if(!result?.ok||!result.delivery)return result;
+    const end=Date.now()+16000,id=result.delivery.id;
+    while(valid()&&['pending','leased'].includes(result.delivery.status)){
+-    const state=await auth.gameRuntime('state',{eventId:id});
++    const state=await requestRuntime('state',{eventId:id});
+     if(!valid())return{ok:false,error:'cancelled'};
+     if(!state?.ok)return state||{ok:false,error:'offline'};
+     if(state.state==='stopped')return{ok:false,error:'run_expired'};
+@@ -135,15 +155,15 @@
+  }
+  async function status(input={}){
+   if(current.mode!=='game'||!current.id)return{ok:true,...state()};
+-  const ticket=generation,result=await auth.gameRuntime('state',input?.eventId?{eventId:input.eventId}:undefined);if(ticket!==generation)return{ok:false,error:'cancelled'};
++  const ticket=generation,result=await requestRuntime('state',input?.eventId?{eventId:input.eventId}:undefined);if(ticket!==generation)return{ok:false,error:'cancelled'};
+   if(!result?.ok)return result;if(result.state==='stopped'){await stop('run_expired');return{ok:true,...state()}}
+   current.latest=result.latest;publish();return{ok:true,...state()};
+  }
+- async function sendTest(){if(current.state!=='ready')return{ok:false,error:'game_not_ready'};return auth.gameRuntime('test',{runId:current.id,generation:current.generation,clientEventId:randomUUID()});}
+- function schedule(){if(!flushTimer&&!sending&&queue.length){flushTimer=setTimeout(()=>{flushTimer=null;flush()},Math.max(0,1000-(clock()-lastFlush)));flushTimer.unref?.()}}
++ async function sendTest(){if(current.state!=='ready')return{ok:false,error:'game_not_ready'};return requestRuntime('test',{runId:current.id,generation:current.generation,clientEventId:randomUUID()});}
++ function schedule(){if(!flushTimer&&!sending&&queue.length){flushTimer=setTimeout(()=>{flushTimer=null;flush()},Math.max(0,200-(clock()-lastFlush),runtimeWait('events')));flushTimer.unref?.()}}
+  async function flush(){
+-  if(sending||!queue.length||current.state!=='ready')return;const ticket=generation,batch=queue.splice(0,32);sending=true;lastFlush=clock();
+-  try{const result=await auth.gameRuntime('events',{runId:current.id,generation:current.generation,events:batch.map(row=>row.event)});if(ticket!==generation)return;
++  if(sending||!queue.length||current.state!=='ready')return;if(runtimeWait('events')>0){schedule();return;}const ticket=generation,batch=queue.splice(0,32);sending=true;lastFlush=clock();
++  try{const result=await requestRuntime('events',{runId:current.id,generation:current.generation,events:batch.map(row=>row.event)});if(ticket!==generation)return;
+    if(!result?.ok){if(['run_expired','game_not_ready','game_not_owned','device_revoked'].includes(result?.error))return stop(result.error);
+     const retry=batch.filter(row=>++row.attempts<3&&clock()-row.at<12000);queue=retry.concat(queue).slice(0,500);current.error=result?.error||'games_service_unavailable';publish();
+    }else if(result.errors?.length){current.lastEventError=result.errors[0].error;publish();}
+--- a/src/core/gameRuntime.test.js
++++ b/src/core/gameRuntime.test.js
+@@ -17,7 +17,8 @@
+   bus.emit('chat',{userId:'123',uniqueId:'Viewer',comment:'Roblox_User extra',msgId:joinMode+'-invalid'});
+   if(joinMode!=='either')bus.emit('chat',{userId:'123',uniqueId:'Viewer',comment:joinMode==='at'?'Roblox_User':'@Roblox_User',msgId:joinMode+'-wrong-format'});
+   for(const [i,comment] of comments.entries())bus.emit('chat',{userId:'123',uniqueId:'Viewer',comment,msgId:joinMode+i});
+-  await new Promise(r=>setTimeout(r,20));
++  const deadline=Date.now()+2000;
++  while(calls.filter(c=>c[0]==='events').slice(before).flatMap(c=>c[1].events).length<comments.length&&Date.now()<deadline)await new Promise(r=>setTimeout(r,10));
+   const sent=calls.filter(c=>c[0]==='events').slice(before).flatMap(c=>c[1].events);
+   assert.equal(sent.length,comments.length,'The live filter respects '+joinMode+' without any ordinary chat rule');
+   assert.ok(sent.every(e=>e.eventType==='join'&&e.robloxUsername==='Roblox_User'));
+--- a/package.json
++++ b/package.json
+@@ -17,7 +17,7 @@
+     "test:protection": "node scripts/build-protection.test.js && node scripts/production-devtools.test.js && node scripts/asar-protection.test.js",
+     "gifts:pull": "node scripts/pull-gifts.js",
+     "test": "node smoke-test.js",
+-    "test:games": "node server/src/hyperRunGifts.test.js && node src/core/game-final-gifts.test.js && node src/core/games.test.js && node server/src/gameRules.test.js && node src/core/game-overlays.test.js && node src/core/game-overlay-preview.test.js && node src/ui/js/game-overlays-ui.test.js && node src/ui/js/games-ui.test.js && node src/ui/js/shared-tiktok-username.test.js && node src/core/gameEvents.test.js && node src/core/games-gift-pipeline.test.js && node src/core/gameRuntime.test.js && node src/core/gameRuntime-testing.test.js && node src/core/gameRuntime-offline.test.js && node src/core/gameRuntime-regressions.test.js && node src/core/games-action-isolation.test.js && node src/core/connect.test.js && node src/core/actions-runtime.test.js && node src/core/keypress-runtime.test.js",
++    "test:games": "node server/src/hyperRunGifts.test.js && node src/core/game-final-gifts.test.js && node src/core/games.test.js && node server/src/gameRules.test.js && node src/core/game-overlays.test.js && node src/core/game-overlay-preview.test.js && node src/ui/js/game-overlays-ui.test.js && node src/ui/js/games-ui.test.js && node src/ui/js/shared-tiktok-username.test.js && node src/core/gameEvents.test.js && node src/core/games-gift-pipeline.test.js && node src/core/gameRuntime-realtime.test.js && node src/core/gameRuntime.test.js && node src/core/gameRuntime-testing.test.js && node src/core/gameRuntime-offline.test.js && node src/core/gameRuntime-regressions.test.js && node src/core/games-action-isolation.test.js && node src/core/connect.test.js && node src/core/actions-runtime.test.js && node src/core/keypress-runtime.test.js",
+     "dist": "electron-builder --win --publish never",
+     "release": "electron-builder --win --publish always"
+   },
+--- /dev/null
++++ b/server/src/gameRuntime-batch-ack.test.js
+@@ -0,0 +1,55 @@
++const assert=require('node:assert/strict');
++const {createRuntime}=require('./gameRuntime');
++const {hashToken}=require('./gameRuntimeAuth');
++
++async function exercise(){
++ let time=Date.now(),mutations=0;
++ const session={id:'server',tokenHash:'hash',expiresAt:new Date(time+180000),quotaAt:new Date(time),quotaCount:0,universeId:'1',placeId:'2',players:['42','43'],credential:{},game:{active:true,version:1,universeId:'1',placeIdsJson:'["2"]'}};
++ const rows=new Map();
++ const make=(id,owner='42')=>{const row={id,serverSessionId:'server',ownerRobloxId:owner,eventType:'gift',payload:{},receiptHash:hashToken('receipt-'+id),receiptUntil:new Date(time+20000),expiresAt:new Date(time+120000),generation:'one',status:'leased',run:{id:'run-'+owner,generation:'one',state:'ready',validUntil:new Date(time+180000),version:1}};rows.set(id,row);return row;};
++ const tx={
++  $queryRaw:async()=>[session],
++  gameServerSession:{update:async({data})=>Object.assign(session,data)},
++  gameDelivery:{findFirst:async({where})=>{const row=rows.get(where.id);return row?.serverSessionId===where.serverSessionId?row:null;},update:async({where,data})=>{mutations++;return Object.assign(rows.get(where.id),data);}},
++  gameViewer:{updateMany:async()=>({count:1})}
++ };
++ tx.gameCredential={findUnique:async()=>({id:'credential',game:{...session.game,placeIdsJson:'["2"]'}})};
++ tx.gameServerSession.findUnique=async()=>null;
++ tx.gameServerSession.upsert=async({create})=>{assert.equal(create.capabilities,undefined,'Negotiation data is not spread into Prisma fields');session.receiptCacheV2=create.receiptCacheV2;return session;};
++ const runtime=createRuntime({db:{...tx,$transaction:async fn=>fn(tx)},clock:()=>time});
++ const registered=await runtime.registerServer('fixture-token',{universeId:'1',placeId:'2',jobId:'job',instanceNonce:'a'.repeat(32),players:['42','43']});
++ assert.equal(session.receiptCacheV2,false);
++ await runtime.registerServer('fixture-token',{universeId:'1',placeId:'2',jobId:'job',instanceNonce:'a'.repeat(32),players:['42','43'],capabilities:{batchAck:true,receiptCacheV2:true}});
++ assert.equal(session.receiptCacheV2,true,'The explicit cache capability enables the extended contract');
++ assert.deepEqual(registered.capabilities,{batchAck:true,boundedPipeline:true},'Clients only use batch ACK after the backend advertises it');
++ const receipt=(id,ok=true)=>({eventId:id,receipt:'receipt-'+id,ok});
++ make('one');make('two','43');
++ assert.equal(typeof runtime.ackBatch,'function','Runtime must support authenticated bounded batch ACK');
++ await assert.rejects(()=>runtime.ackBatch(session,{receipts:[]}),/invalid_ack/);
++ await assert.rejects(()=>runtime.ackBatch(session,{receipts:Array(33).fill(receipt('one'))}),/invalid_ack/);
++ await assert.rejects(()=>runtime.ackBatch(session,{receipts:[receipt('one'),{...receipt('two'),ownerRobloxId:'42'}]}),/invalid_input/);
++ assert.equal(mutations,0,'Validate the entire request before any delivery mutation');
++ make('foreign').serverSessionId='other';
++ await assert.rejects(()=>runtime.ackBatch(session,{receipts:[receipt('one'),receipt('foreign')]}),/delivery_not_found/);
++ assert.equal(mutations,0,'A foreign server receipt cannot partially commit the first ACK');
++ make('absent','99');
++ await assert.rejects(()=>runtime.ackBatch(session,{receipts:[receipt('one'),receipt('absent')]}),/delivery_expired/);
++ assert.equal(mutations,0,'Every owner must still be in this server roster before mutations');
++ await assert.rejects(()=>runtime.ackBatch(session,{receipts:[receipt('one'),{...receipt('two'),receipt:'forged'}]}),/invalid_receipt/);
++ assert.equal(mutations,0,'A forged later receipt cannot commit an earlier valid receipt');
++ rows.get('two').run.generation='stale';
++ await assert.rejects(()=>runtime.ackBatch(session,{receipts:[receipt('one'),receipt('two')]}),/delivery_expired/);
++ rows.get('two').run.generation='one';
++ const before=session.quotaCount;
++ const result=await runtime.ackBatch(session,{receipts:[receipt('one'),receipt('two',false),receipt('one')]});
++ assert.deepEqual(result,{results:[{eventId:'one',ok:true},{eventId:'two',ok:true},{eventId:'one',ok:true}]});
++ assert.equal(session.quotaCount,before+1,'One batch consumes one server request regardless of event count');
++ assert.equal(rows.get('one').status,'succeeded');assert.equal(rows.get('two').status,'failed');assert.equal(mutations,2,'Duplicate entries mutate only once');
++ await runtime.ackBatch(session,{receipts:[receipt('one'),receipt('two',false)]});assert.equal(mutations,2,'Retry never reapplies completed deliveries');
++ await assert.rejects(()=>runtime.ackBatch(session,{receipts:[{...receipt('one'),receipt:'forged'}]}),/invalid_receipt/);
++ make('old');await runtime.ackTest(session,receipt('old'));assert.equal(rows.get('old').status,'succeeded','Old single-ACK clients stay compatible');
++ make('expired');time+=21000;
++ await assert.rejects(()=>runtime.ackBatch(session,{receipts:[receipt('expired')]}),/delivery_expired/);
++ console.log('PASS batch ACK: bounds, atomic scope validation, cross-owner isolation, generation, retries, duplicates, one-request quota and single-ACK compatibility');
++}
++exercise().catch(e=>{console.error(e);process.exitCode=1});
+--- /dev/null
++++ b/server/src/gameRuntime-batch-routes.test.js
+@@ -0,0 +1,27 @@
++const assert=require('node:assert/strict'),crypto=require('node:crypto');
++const put=(name,exports)=>{const id=require.resolve(name);require.cache[id]={id,filename:id,loaded:true,exports}};
++put('./config',{jwtSecret:crypto.randomBytes(48).toString('base64url'),accessTtlMin:15});
++put('./db',{});put('./service',{isUserBlocked:async()=>false});
++const express=require('express'),{createRuntimeRoutes}=require('./gameRuntimeRoutes'),{hashToken}=require('./gameRuntimeAuth');
++(async()=>{
++ const token='s'.repeat(43),session={id:'server',expiresAt:new Date(Date.now()+60000),credential:{},universeId:'1',placeId:'2',game:{active:true,universeId:'1',placeIdsJson:'["2"]'}};
++ let call;const polls=[];
++ const db={$queryRaw:async(_strings,hash)=>hash===hashToken(token)?[session]:[]};
++ const app=express();app.use('/runtime',createRuntimeRoutes({db,runtime:{pollTests:async(s,_signal,limit)=>{polls.push({s,limit});return{deliveries:[]}},ackBatch:async(s,input)=>{call={s,input};return{results:[{eventId:'one',ok:true}]}}}}));
++ const server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));
++ try{
++  const url='http://127.0.0.1:'+server.address().port+'/runtime/server/ack-batch';
++  const body={receipts:[{eventId:'one',receipt:'fixture-receipt',ok:true}]};
++  const send=key=>fetch(url,{method:'POST',headers:{'Content-Type':'application/json',...(key?{Authorization:'Bearer '+key}:{})},body:JSON.stringify(body)});
++  assert.equal((await send()).status,401);assert.equal((await send('x'.repeat(43))).status,401);assert.equal(call,undefined);
++  assert.equal((await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({oversized:'x'.repeat(66000)})})).status,413);
++  const response=await send(token);assert.equal(response.status,200);assert.equal(response.headers.get('cache-control'),'no-store');
++  assert.deepEqual(await response.json(),{results:[{eventId:'one',ok:true}]});assert.equal(call.s,session);assert.deepEqual(call.input,body);
++  const poll=body=>fetch(url.replace('/ack-batch','/poll'),{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+token},body:JSON.stringify(body)});
++  assert.equal((await poll({limit:7})).status,200);assert.equal(polls[0].limit,7);assert.equal(polls[0].s,session);
++  assert.equal((await poll({})).status,200,'Legacy empty poll bodies remain supported');
++  for(const limit of [0,33,1.5,'7',null])assert.equal((await poll({limit})).status,400);
++  assert.equal((await poll({limit:7,ownerRobloxId:'other'})).status,400);assert.equal(polls.length,2,'Malformed limits cannot reach runtime admission');
++  console.log('PASS batch ACK HTTP: server-token scope, missing/forged token rejection, bounded JSON parser and no-store');
++ }finally{await new Promise(r=>server.close(r));}
++})().catch(e=>{console.error(e);process.exitCode=1});
+--- /dev/null
++++ b/src/core/gameRuntime-realtime.test.js
+@@ -0,0 +1,45 @@
++const assert=require('node:assert/strict'),{EventEmitter}=require('node:events');
++const {createGameRuntime}=require('./gameRuntime');
++(async()=>{
++ let time=1000000,nextId=0;const scheduled=new Map(),original={setTimeout,clearTimeout,setInterval,clearInterval};
++ const timer=(fn,delay,repeat)=>{const id=++nextId;const handle={id,unref(){}};scheduled.set(id,{fn,at:time+Number(delay||0),repeat,handle});return handle;};
++ global.setTimeout=(fn,delay)=>timer(fn,delay,0);global.clearTimeout=handle=>scheduled.delete(handle?.id);
++ global.setInterval=(fn,delay)=>timer(fn,delay,delay);global.clearInterval=global.clearTimeout;
++ const settle=async()=>{for(let i=0;i<10;i++)await Promise.resolve();};
++ const advance=async ms=>{const until=time+ms;for(;;){let next;for(const row of scheduled.values())if(row.at<=until&&(!next||row.at<next.at))next=row;if(!next)break;time=next.at;scheduled.delete(next.handle.id);if(next.repeat){next.at=time+next.repeat;scheduled.set(next.handle.id,next);}next.fn();await settle();}time=until;await settle();};
++ let rt;
++ try{
++  const bus=new EventEmitter(),calls=[];
++  const auth={publicState:()=>({loggedIn:true,user:{id:'alice'}}),gameRuntime:async(op,body)=>{calls.push({op,body,at:time});return{ok:true,id:'run',generation:'one',state:'ready',validUntil:new Date(time+60000).toISOString()};}};
++  const game={id:'game',version:1,access:'owned',accounts:[{userId:'42'}],effects:[{key:'power',min:1,max:100}],profile:{rules:[{giftId:'1',giftName:'Rose',effectKey:'power',value:1},{eventType:'like',likeCount:100,likeScope:'user',effectKey:'power',value:1}],joinMode:'either'}};
++  rt=createGameRuntime({auth,tiktok:{getState:()=>({status:'connected',username:'streamer'})},games:{list:async()=>({ok:true,games:[game]})},actions:{setRuntimePaused(){}},bus,clock:()=>time});
++  assert.equal((await rt.start({gameId:'game',accountId:'42',username:'streamer'})).ok,true);
++  let sequence=0;const join=()=>bus.emit('chat',{userId:'123',uniqueId:'viewer',comment:'Viewer_A',msgId:'join-'+sequence++});
++  join();await advance(0);assert.equal(calls.filter(row=>row.op==='events').length,1);
++  join();await advance(200);assert.equal(calls.filter(row=>row.op==='events').length,2,'A sparse next event reaches the backend after200ms');
++  const beforeMalformed=calls.length;assert.equal((await rt.simulate({ruleIndex:-1,tiktokUsername:'invalid name',robloxUsername:'Viewer_A'})).ok,false);assert.equal(calls.length,beforeMalformed);
++  bus.emit('gift',{userId:'123',uniqueId:'viewer',giftId:'1',repeatCount:0,msgId:'invalid-gift'});
++  let giftQuantity=0,likeCount=0;
++  for(let i=0;i<600;i++){
++   const amount=i%7+1,base={userId:'123',uniqueId:'viewer',msgId:'stream-'+i};
++   if(i%2){giftQuantity+=amount;bus.emit('gift',{...base,giftId:'1',repeatCount:amount});}
++   else{likeCount+=amount;bus.emit('like',{...base,likeCount:amount});}
++   await advance(200);
++  }
++  await advance(1000);
++  const uploads=calls.filter(row=>row.op==='events');
++  for(let i=1;i<uploads.length;i++)assert.ok(uploads[i].at-uploads[i-1].at<=1000,'Steady5Hz input must not cause a multi-second upload blackout');
++  const packets=uploads.flatMap(row=>row.body.events);
++  assert.equal(packets.length,602,'All queued packets are preserved while uploads coalesce');
++  assert.equal(packets.filter(row=>row.eventType==='gift').reduce((sum,row)=>sum+row.quantity,0),giftQuantity,'Every gift quantity survives pacing');
++  assert.equal(packets.filter(row=>row.eventType==='like').reduce((sum,row)=>sum+row.count,0),likeCount,'Every heart count survives pacing');
++  assert.ok(uploads.some(row=>row.body.events.length>1),'Sustained traffic coalesces into bounded batches');
++  for(let i=0;i<50;i++)await rt.status();
++  assert.ok(calls.filter(row=>row.op==='state').length<50,'State polling shares the authenticated request budget');
++  const heartbeats=calls.filter(row=>row.op==='heartbeat').length;await advance(20000);
++  assert.ok(calls.filter(row=>row.op==='heartbeat').length>heartbeats,'Presence keeps reserved capacity after state polling saturates');
++  await rt.stop();assert.equal(calls.at(-1).op,'stop','Stopping retains a reserved critical slot');rt.dispose();
++  for(const row of calls){const window=calls.filter(other=>other.at>row.at-60000&&other.at<=row.at);assert.ok(window.length<=180,'All runtime operations stay below the backend200/min ceiling');assert.ok(window.filter(other=>other.op==='events').length<=160);assert.ok(window.filter(other=>!['start','stop','heartbeat'].includes(other.op)).length<=170);}
++  console.log('PASS desktop realtime: sparse200ms response, two-minute5Hz pacing without blackouts, exact gifts/hearts, rolling160/170/180 bounds and reserved heartbeat/stop');
++ }finally{if(rt)rt.dispose();Object.assign(global,original);}
++})().catch(e=>{console.error(e);process.exitCode=1});
+--- /dev/null
++++ b/server/prisma/migrations/20261018120000_receiver_receipt_cache_v2/migration.sql
+@@ -0,0 +1,2 @@
++-- Existing receivers retain their original delivery and receipt lifetimes.
++ALTER TABLE "GameServerSession" ADD COLUMN "receiptCacheV2" BOOLEAN NOT NULL DEFAULT false;
+--- /dev/null
++++ b/docs/games-realtime-protocol.md
+@@ -0,0 +1,33 @@
++# Realtime Roblox receiver protocol
++
++Registration accepts an optional, strictly allowlisted capability object:
++
++```json
++{"capabilities":{"batchAck":true,"receiptCacheV2":true}}
++```
++
++`receiptCacheV2` is stored on `GameServerSession` and defaults to false for existing rows and registrations without the flag. It means the receiver retains completed event IDs through each event's full expiry, including after session-token refresh. A backend restart preserves this agreement.
++
++| Bound receiver | Event lifetime | Receipt lease |
++| --- | --- | --- |
++| Legacy / no explicit cache capability | 15 seconds, bounded by the current run lease | 5 seconds |
++| Explicit `receiptCacheV2: true` | 120 seconds | 20 seconds |
++
++Every enqueue path, including Desktop gifts and tests, uses the bound server's stored capability. Current owner, server, run, generation and license checks remain required. A response advertising batch ACK alone never opts an old receiver into longer delivery lifetimes.
++
++The backend advertises `capabilities.batchAck: true`. Only then does the receiver use `POST /api/games/runtime/server/ack-batch` with `{receipts:[...]}` containing 1–32 existing single-ACK bodies. All receipts are validated and authorized before any delivery mutation; any invalid item rejects the entire batch. The original `/ack` endpoint remains supported. New receivers retry registration without capability fields if an old backend strictly rejects those fields.
++
++The backend also advertises `capabilities.boundedPipeline: true`. Only then does the receiver include an optional integer `limit` from 1 through 32 in poll requests. SQL atomically caps active receipt leases at 32 per server session, including concurrent polls; the receiver independently caps reserved deliveries at 32. Completed receipts coalesce for 50ms before ACK, so a slow avatar join does not delay polling for another viewer. Each actor has one FIFO queue across poll batches. A batch may contain a prefix of ordinary effects for one actor; a join waits for every earlier event, and later events wait for the join's ACK. Any earlier live receipt lease also blocks that actor's suffix. This retains 32-event batching for busy viewers.
++
++Polling checks pending work every 100ms and rotates owners across batches, including when more than 32 owners have queued events. The advisory owner cursor resets after a backend restart; receipt ownership and capability metadata remain durable. A backend without the pipeline capability continues using empty poll bodies and waits for the current batch to finish before polling again. Batch ACK and pipeline capability are independent; single-ACK backends retain the same bounded actor queues when pipeline support is advertised.
++
++Sparse Desktop submissions can flush every 200ms. A two-request upload token bucket replenishes every 375ms to coalesce sustained traffic without exhausting the minute budget in an early burst. A sliding budget limits event requests to 160/minute and ordinary runtime operations to 170/minute, reserving capacity for start/stop/heartbeat through 180 total/minute. The backend retains its 200 authenticated requests/minute ceiling and 1,200 events/minute per run ceiling.
++
++## Rollout
++
++1. Back up the database, apply migration `20261018120000_receiver_receipt_cache_v2`, and regenerate the Prisma client before deploying the backend.
++2. Deploy the backend. Existing Roblox servers retain their original 15s/5s protocol and cannot replay a paid gift after their older deduplication cache expires.
++3. Publish the map with `LiveHttpBudget` and the updated `TikkiesGames` adapter. New receivers explicitly negotiate the longer lifetime; old servers may remain online safely.
++4. Ship the faster Desktop runtime after the backend's 160/minute submission allowance is available. Older Desktop builds continue to work with their slower flush interval.
++
++These instructions describe the protocol and deployment order; local tests do not establish production deployment or real TikTok gameplay verification.

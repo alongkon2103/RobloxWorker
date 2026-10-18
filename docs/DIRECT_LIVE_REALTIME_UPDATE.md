@@ -18,6 +18,10 @@ Empty polls can wait up to 10 seconds and wake as soon as committed events becom
 
 Only four Roblox username lookups run concurrently in the Worker. Other actors' ready rewards continue while a lookup is unresolved. An actor still waits for its own join or rebind to complete.
 
+## Tikkies delivery
+
+The upgraded backend advertises a bounded pipeline. The adapter can receive and acknowledge other actors while an avatar yields, retaining per-actor order across polls. There are at most 32 outstanding delivery reservations and active server leases. Ready receipts coalesce for 50ms before batch acknowledgement. A single actor can receive a prefix of effects in one batch; a join remains a barrier. Older backends keep the compatible one-batch-at-a-time receiver path. Desktop pacing and the database migration are described in `TIKKIES_REALTIME_PROTOCOL.md`.
+
 ## HTTP admission budget
 
 `ServerScriptService.LiveHttpBudget` gates actual request start times and is shared by the Direct receiver, Tikkies adapter and overlay/result transport.
