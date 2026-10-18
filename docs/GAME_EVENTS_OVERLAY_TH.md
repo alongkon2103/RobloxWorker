@@ -1,6 +1,6 @@
 # Game Events Overlay — คู่มือติดตั้งและทดสอบ
 
-18 ตุลาคม 2026 — โค้ดและตัวอย่างในเครื่องพร้อมทดสอบ; ติดตั้งโมดูลและแพตช์เฉพาะจุดใน Studio Edit แล้ว สำรองไว้ที่ ServerStorage.CodexMapBackups.BeforeGameEvents20261018_* ยังไม่ deploy VPS, Publish แมพ หรือ build EXE ใหม่
+18 ตุลาคม 2026 — โค้ดและตัวอย่างในเครื่องพร้อมทดสอบ; ติดตั้งโมดูลและแพตช์เฉพาะจุดใน Studio Edit แล้ว สำรองไว้ที่ ServerStorage.CodexMapBackups.BeforeGameEvents20261018_* Worker deploy บน VPS แล้วจาก commit `3a8c040` และตรวจ production ผ่าน; ส่วน Tikkies Auth backend/โปรแกรมรุ่นใหม่ยังไม่ได้ deploy/build ในงานนี้ และผมยังไม่ได้ Publish แมพ
 
 ## หน้าตาและการทำงาน
 
