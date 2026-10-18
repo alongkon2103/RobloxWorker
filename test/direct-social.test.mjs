@@ -58,3 +58,22 @@ test('Direct social defaults never apply to Tikkies provider sessions',async()=>
   await tr.handle(s.id,1,compactMessage(like('likes',20)));await tr.handle(s.id,1,compactMessage(follow('follow')));assert.equal(take(store,s.id),null);
  }finally{store.close();}
 });
+test('ordinary Direct chat cannot fill the effects queue or delay hearts',async()=>{
+ const store=new Store(':memory:',{maxQueue:1});try{
+  const a=await setup(store);await a.handle(raw('WebcastChatMessage','chat',{comment:'hello everyone!'}));
+  await a.handle(like('hearts',20));assert.equal(take(store,a.s.id).eventType,'like');assert.equal(take(store,a.s.id),null);
+  await a.handle(raw('WebcastChatMessage','explicit',{comment:'@New_Runner'}));assert.equal(take(store,a.s.id).eventType,'join');
+ }finally{store.close();}
+});
+test('100 joined actors chatting and sending two heart waves drain before expiry in bounded batches',async()=>{
+ let now=1000;const store=new Store(':memory:',{now:()=>now});try{
+  const s=store.create({ownerRobloxId:'1',jobId:'j',tiktokUsername:'live'});const tr=new EventTranslator(store,{resolve:async name=>({id:42,name}),giftMap:{}});
+  for(let i=0;i<100;i++){await tr.handle(s.id,1,compactMessage(raw('WebcastChatMessage','join-'+i,{comment:'@Runner'},'viewer'+i)));take(store,s.id);}
+  for(let wave=0;wave<2;wave++)for(let i=0;i<100;i++){
+   await tr.handle(s.id,1,compactMessage(raw('WebcastChatMessage','chat-'+wave+'-'+i,{comment:'Go go!!'},'viewer'+i)));
+   await tr.handle(s.id,1,compactMessage(like('hearts-'+wave+'-'+i,20,'viewer'+i)));
+  }
+  let delivered=0,polls=0;while(store.public(store.get(s.id)).queueDepth){const batch=store.pollBatch(s.id,32);assert.ok(batch.length>0&&batch.length<=32);for(const e of batch){assert.deepEqual(e.effects,[{key:'speed_boost',value:1,count:1}]);store.ack(s.id,e.eventId,e.receipt);delivered++;}now+=500;polls++;}
+  assert.equal(delivered,200);assert.equal(polls,7);assert.equal(store.db.prepare("SELECT COUNT(*) AS n FROM events WHERE status='expired'").get().n,0);
+ }finally{store.close();}
+});

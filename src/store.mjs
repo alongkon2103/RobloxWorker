@@ -1,5 +1,6 @@
 import {LIKES_PER_BOOST} from './direct-rules.mjs';
 import {DatabaseSync} from 'node:sqlite';
+import {EventEmitter} from 'node:events';
 import {createHash,randomBytes,randomUUID,timingSafeEqual} from 'node:crypto';
 import {mkdirSync} from 'node:fs';
 import {dirname} from 'node:path';
@@ -9,6 +10,7 @@ export const constantEqual=(a,b)=>typeof a==='string'&&typeof b==='string'&&timi
 const terminal=['closed','expired'];
 export class Store {
  constructor(file,{now=Date.now,eventTTL=120000,leaseMs=20000,maxQueue=1000,sessionTTL=90000,maxSessions=200,maxInbox=10000,maxActors=100}={}){
+  this.changes=new EventEmitter();this.changes.setMaxListeners(0);this.transactionChanges=null;
   this.now=now;this.eventTTL=eventTTL;this.leaseMs=leaseMs;this.maxQueue=maxQueue;this.sessionTTL=sessionTTL;this.maxSessions=maxSessions;this.maxInbox=maxInbox;this.maxActors=Math.min(100,maxActors);
   if(file!==':memory:')mkdirSync(dirname(file),{recursive:true,mode:0o700});
   this.db=new DatabaseSync(file);this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON;
@@ -29,6 +31,12 @@ export class Store {
    CREATE TABLE IF NOT EXISTS gift_receipts(universe_id TEXT NOT NULL,streamer TEXT NOT NULL,source_hash TEXT NOT NULL,seen_at INTEGER NOT NULL,PRIMARY KEY(universe_id,streamer,source_hash));`);
   this.db.exec(`CREATE TABLE IF NOT EXISTS direct_social_progress(session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,generation INTEGER NOT NULL,actor_key TEXT NOT NULL,likes INTEGER NOT NULL,PRIMARY KEY(session_id,generation,actor_key));
    CREATE TABLE IF NOT EXISTS direct_social_receipts(universe_id TEXT NOT NULL,streamer TEXT NOT NULL,source_hash TEXT NOT NULL,seen_at INTEGER NOT NULL,PRIMARY KEY(universe_id,streamer,source_hash));`);
+  this.tx(()=>{
+   const inboxColumns=new Set(this.db.prepare('PRAGMA table_info(inbox)').all().map(c=>c.name));
+   for(const [name,sql]of [['actor_key',"TEXT NOT NULL DEFAULT ''"],['retry_at','INTEGER NOT NULL DEFAULT 0'],['attempts','INTEGER NOT NULL DEFAULT 0']])if(!inboxColumns.has(name))this.db.exec(`ALTER TABLE inbox ADD COLUMN ${name} ${sql}`);
+   if(!inboxColumns.has('actor_key'))this.db.exec("UPDATE inbox SET actor_key=COALESCE(json_extract(payload,'$.data.user.userId'),'')");
+   this.db.exec('CREATE INDEX IF NOT EXISTS inbox_actor ON inbox(session_id,generation,actor_key,seq)');
+  });
   const columns=new Set(this.db.prepare('PRAGMA table_info(sessions)').all().map(c=>c.name));
   if(!this.db.prepare('PRAGMA table_info(published_gift_defaults)').all().some(c=>c.name==='gift_names'))this.db.exec("ALTER TABLE published_gift_defaults ADD COLUMN gift_names TEXT NOT NULL DEFAULT '{}'");
   for(const [name,sql]of [['gift_names',"TEXT NOT NULL DEFAULT '{}'"],['universe_id',"TEXT NOT NULL DEFAULT ''"],['gift_map_version','TEXT'],['gift_map_source','TEXT']])if(!columns.has(name))this.db.exec(`ALTER TABLE sessions ADD COLUMN ${name} ${sql}`);
@@ -37,7 +45,12 @@ export class Store {
   this.db.exec(`CREATE TABLE IF NOT EXISTS direct_result_bindings(universe_id TEXT NOT NULL,owner_id TEXT NOT NULL,job_id TEXT NOT NULL,channel TEXT NOT NULL,PRIMARY KEY(universe_id,owner_id,job_id,channel));
    INSERT OR IGNORE INTO direct_result_bindings SELECT universe_id,owner_id,job_id,tiktok FROM sessions WHERE provider='direct';`);
  }
- tx(fn){this.db.exec('BEGIN IMMEDIATE');try{const result=fn();this.db.exec('COMMIT');return result;}catch(e){this.db.exec('ROLLBACK');throw e;}}
+ tx(fn){
+  this.db.exec('BEGIN IMMEDIATE');this.transactionChanges=new Map();let result,changes;
+  try{result=fn();this.db.exec('COMMIT');changes=this.transactionChanges;}catch(e){this.db.exec('ROLLBACK');this.transactionChanges=null;throw e;}
+  this.transactionChanges=null;for(const [id,reason]of changes)this.changes.emit('change',id,reason);return result;
+ }
+ notify(id,reason='events'){if(this.transactionChanges)this.transactionChanges.set(id,reason);else this.changes.emit('change',id,reason);}
  get(id){const s=this.db.prepare('SELECT * FROM sessions WHERE id=?').get(id);if(!s)throw new Fault('session_not_found',404);return s;}
  public(s){return {id:s.id,ownerRobloxId:s.owner_id,jobId:s.job_id,tiktokUsername:s.tiktok,provider:s.provider,universeId:s.universe_id,giftMapVersion:s.gift_map_version,giftMapSource:s.gift_map_source??(s.gift_map===null?'static':'override'),joinMode:s.join_mode,status:s.status,runId:s.run_id,generation:s.generation,lastCode:s.last_code,queueDepth:this.db.prepare("SELECT COUNT(*) AS n FROM events WHERE session_id=? AND generation=? AND status='pending' AND expires_at>?").get(s.id,s.generation,this.now()).n};}
  create({ownerRobloxId,jobId,tiktokUsername,provider='direct',giftMap=null,giftNames={},joinMode='both',universeId='',giftMapVersion=null,giftMapSource=giftMap===null?'static':'override'}){
@@ -56,8 +69,8 @@ export class Store {
  setJoinMode(id,mode){if(!['at','plain','both'].includes(mode))throw new Fault('invalid_join_mode');this.heartbeat(id);this.db.prepare('UPDATE sessions SET join_mode=? WHERE id=?').run(mode,id);return this.public(this.get(id));}
  authenticate(id,token){const s=this.get(id);if(typeof token!=='string'||!constantEqual(s.token_hash,digest(token)))throw new Fault('unauthorized',401);return s;}
  heartbeat(id){if(terminal.includes(this.get(id).status))throw new Fault('session_inactive',410);this.db.prepare('UPDATE sessions SET seen_at=? WHERE id=?').run(this.now(),id);return this.public(this.get(id));}
- reset(id,requestId=randomUUID()){return this.tx(()=>{const s=this.get(id);if(terminal.includes(s.status))throw new Fault('session_inactive',410);const saved=this.db.prepare('SELECT response FROM controls WHERE session_id=? AND request_id=?').get(id,requestId);if(saved)return JSON.parse(saved.response);this.db.prepare('UPDATE sessions SET generation=generation+1,run_id=?,seen_at=? WHERE id=?').run(randomUUID(),this.now(),id);for(const table of ['events','actors','sources','inbox','direct_social_progress'])this.db.prepare(`DELETE FROM ${table} WHERE session_id=?`).run(id);const response=this.public(this.get(id));this.db.prepare('INSERT INTO controls VALUES(?,?,?,?)').run(id,requestId,JSON.stringify(response),this.now());this.db.prepare('DELETE FROM controls WHERE session_id=? AND request_id NOT IN (SELECT request_id FROM controls WHERE session_id=? ORDER BY created_at DESC LIMIT 128)').run(id,id);return response;});}
- stop(id,status='closed'){this.db.prepare('UPDATE sessions SET status=? WHERE id=?').run(status,id);for(const table of ['events','actors','sources','inbox','direct_social_progress'])this.db.prepare(`DELETE FROM ${table} WHERE session_id=?`).run(id);}
+ reset(id,requestId=randomUUID()){return this.tx(()=>{const s=this.get(id);if(terminal.includes(s.status))throw new Fault('session_inactive',410);const saved=this.db.prepare('SELECT response FROM controls WHERE session_id=? AND request_id=?').get(id,requestId);if(saved)return JSON.parse(saved.response);this.db.prepare('UPDATE sessions SET generation=generation+1,run_id=?,seen_at=? WHERE id=?').run(randomUUID(),this.now(),id);for(const table of ['events','actors','sources','inbox','direct_social_progress'])this.db.prepare(`DELETE FROM ${table} WHERE session_id=?`).run(id);const response=this.public(this.get(id));this.db.prepare('INSERT INTO controls VALUES(?,?,?,?)').run(id,requestId,JSON.stringify(response),this.now());this.db.prepare('DELETE FROM controls WHERE session_id=? AND request_id NOT IN (SELECT request_id FROM controls WHERE session_id=? ORDER BY created_at DESC LIMIT 128)').run(id,id);this.notify(id,'reset');return response;});}
+ stop(id,status='closed'){this.db.prepare('UPDATE sessions SET status=? WHERE id=?').run(status,id);for(const table of ['events','actors','sources','inbox','direct_social_progress'])this.db.prepare(`DELETE FROM ${table} WHERE session_id=?`).run(id);this.notify(id,'stop');}
  expire(){const stale=this.db.prepare("SELECT id FROM sessions WHERE status NOT IN ('closed','expired') AND seen_at<?").all(this.now()-this.sessionTTL);for(const s of stale)this.stop(s.id,'expired');return stale;}
  list(){return this.db.prepare("SELECT * FROM sessions WHERE status NOT IN ('closed','expired') ORDER BY created_at,rowid").all();}
  candidates(){return this.db.prepare("SELECT * FROM sessions WHERE provider='direct' AND status IN ('queued','retrying','offline') AND retry_at<=? ORDER BY retry_at,created_at,rowid").all(this.now());}
@@ -81,7 +94,7 @@ export class Store {
    if(actor)actor={...actor,joinEventId:eventId};
    if(actor)this.db.prepare('INSERT INTO actors(session_id,generation,actor_key,payload) VALUES(?,?,?,?) ON CONFLICT DO UPDATE SET payload=excluded.payload').run(id,generation,actor.actorKey,JSON.stringify(actor));
    this.db.prepare('INSERT INTO sources VALUES(?,?,?,?)').run(id,generation,sourceId,this.now());
-   if(giftIdentity)this.db.prepare('INSERT INTO gift_receipts VALUES(?,?,?,?)').run(s.universe_id,s.tiktok,giftIdentity,this.now());return true;
+   if(giftIdentity)this.db.prepare('INSERT INTO gift_receipts VALUES(?,?,?,?)').run(s.universe_id,s.tiktok,giftIdentity,this.now());this.notify(id);return true;
  }
  socialEvent(id,generation,actor,sourceId,identity,type,count){return this.tx(()=>{
   const s=this.get(id);if(s.provider!=='direct'||terminal.includes(s.status)||s.generation!==generation)return false;
@@ -95,15 +108,46 @@ export class Store {
   if(type==='like')this.db.prepare('INSERT INTO direct_social_progress VALUES(?,?,?,?) ON CONFLICT DO UPDATE SET likes=excluded.likes').run(id,generation,actor.actorKey,total%LIKES_PER_BOOST);
   this.db.prepare('INSERT INTO direct_social_receipts VALUES(?,?,?,?)').run(s.universe_id,s.tiktok,identity,this.now());return true;
  });}
- poll(id){return this.tx(()=>{
+ poll(id){return this.pollBatch(id,1)[0]??null;}
+ pollBatch(id,limit=1){
+  if(!Number.isInteger(limit)||limit<1||limit>32)throw new Fault('invalid_event_limit');
+  return this.tx(()=>{
   const s=this.get(id);if(terminal.includes(s.status))throw new Fault('session_inactive',410);
   this.heartbeat(id);const now=this.now();
   this.expireEvents(id);
-  const e=this.db.prepare("SELECT * FROM events WHERE session_id=? AND generation=? AND status='pending' ORDER BY seq LIMIT 1").get(id,s.generation);
-  if(!e||e.lease_until>now)return null;
-  const receipt=randomBytes(24).toString('base64url');this.db.prepare('UPDATE events SET receipt=?,lease_until=? WHERE seq=?').run(receipt,now+this.leaseMs,e.seq);
-  return {...JSON.parse(e.payload),receipt,expiresAt:new Date(e.expires_at).toISOString(),leaseUntil:new Date(now+this.leaseMs).toISOString()};
+  const rows=this.db.prepare("SELECT * FROM events WHERE session_id=? AND generation=? AND status='pending' ORDER BY seq LIMIT ?").all(id,s.generation,limit);
+  const batch=[];
+  for(const e of rows){
+   if(e.lease_until>now)break;
+   const payload=JSON.parse(e.payload),receipt=randomBytes(24).toString('base64url');
+   this.db.prepare('UPDATE events SET receipt=?,lease_until=? WHERE seq=?').run(receipt,now+this.leaseMs,e.seq);
+   batch.push({...payload,receipt,expiresAt:new Date(e.expires_at).toISOString(),leaseUntil:new Date(now+this.leaseMs).toISOString()});
+   // A join must be acknowledged before any dependent effect is delivered.
+   if(payload.eventType==='join')break;
+  }
+  return batch;
  });}
+ pollActorBatch(id,limit=1,{maxJoins=8}={}){
+  if(!Number.isInteger(limit)||limit<1||limit>32)throw new Fault('invalid_event_limit');
+  if(!Number.isInteger(maxJoins)||maxJoins<0||maxJoins>8)throw new Fault('invalid_join_limit');
+  return this.tx(()=>{
+   const s=this.get(id);if(terminal.includes(s.status))throw new Fault('session_inactive',410);
+   this.heartbeat(id);this.expireEvents(id);const now=this.now(),actors=new Map();
+   for(const row of this.db.prepare("SELECT * FROM events WHERE session_id=? AND generation=? AND status='pending' ORDER BY seq").all(id,s.generation)){
+    const payload=JSON.parse(row.payload),key=payload.actorKey??'';
+    if(!actors.has(key))actors.set(key,[]);actors.get(key).push({row,payload});
+   }
+   const ready=[...actors.values()],batch=[];let joins=0;
+   while(ready.length&&batch.length<limit){
+    const actor=ready.shift(),{row,payload}=actor.shift();
+    if(row.lease_until>now||payload.eventType==='join'&&joins>=maxJoins)continue;
+    const receipt=randomBytes(24).toString('base64url');this.db.prepare('UPDATE events SET receipt=?,lease_until=? WHERE seq=?').run(receipt,now+this.leaseMs,row.seq);
+    batch.push({...payload,receipt,expiresAt:new Date(row.expires_at).toISOString(),leaseUntil:new Date(now+this.leaseMs).toISOString()});
+    if(payload.eventType==='join')joins++;else if(actor.length)ready.push(actor);
+   }
+   return batch;
+  });
+ }
  ack(id,eventId,receipt,{success=true,retry=true}={}){return this.tx(()=>{
   const s=this.get(id);const e=this.db.prepare('SELECT * FROM events WHERE session_id=? AND generation=? AND event_id=?').get(id,s.generation,eventId);
   if(!e||!constantEqual(e.receipt,receipt))throw new Fault('invalid_receipt',409);
@@ -111,6 +155,7 @@ export class Store {
   if(e.expires_at<=this.now()||e.lease_until<=this.now())throw new Fault('receipt_expired',409);
   if(success||!retry){this.db.prepare('UPDATE events SET status=? WHERE seq=?').run(success?'acked':'failed',e.seq);if(!success&&JSON.parse(e.payload).eventType==='join')this.invalidateJoin(e);}
   else this.db.prepare('UPDATE events SET receipt=NULL,lease_until=NULL WHERE seq=?').run(e.seq);
+  this.notify(id,'ack');
   return {duplicate:false};
  });}
  invalidateJoin(event){
@@ -139,11 +184,15 @@ export class Store {
    if(!message||this.seen(id,generation,message.sourceId))continue;
    if(this.db.prepare('SELECT 1 FROM inbox WHERE session_id=? AND generation=? AND source_id=?').get(id,generation,message.sourceId))continue;
    if(depth+added>=this.maxInbox)throw new Fault('inbox_full',429);
-   this.db.prepare('INSERT INTO inbox(session_id,generation,source_id,payload,expires_at) VALUES(?,?,?,?,?)').run(id,generation,message.sourceId,JSON.stringify(message),this.now()+this.eventTTL);added++;
+   this.db.prepare('INSERT INTO inbox(session_id,generation,source_id,payload,expires_at,actor_key) VALUES(?,?,?,?,?,?)').run(id,generation,message.sourceId,JSON.stringify(message),this.now()+this.eventTTL,message.data?.user?.userId??'');added++;
   }
   return added;
  });}
- inbox(id){const s=this.get(id);const row=this.db.prepare('SELECT * FROM inbox WHERE session_id=? AND generation=? AND expires_at>? ORDER BY seq LIMIT 1').get(id,s.generation,this.now());return row?{...row,...JSON.parse(row.payload),generation:row.generation}:null;}
+ inbox(id,excludeActors=[]){const s=this.get(id);const now=this.now();const row=this.db.prepare(`SELECT i.* FROM inbox i WHERE i.session_id=? AND i.generation=? AND i.expires_at>? AND i.retry_at<=?
+  ${excludeActors.length?'AND i.actor_key NOT IN ('+excludeActors.map(()=>'?').join(',')+')':''}
+  AND NOT EXISTS(SELECT 1 FROM inbox earlier WHERE earlier.session_id=i.session_id AND earlier.generation=i.generation AND earlier.actor_key=i.actor_key AND earlier.seq<i.seq AND earlier.expires_at>?)
+  ORDER BY EXISTS(SELECT 1 FROM actors a WHERE a.session_id=i.session_id AND a.generation=i.generation AND a.actor_key='tiktok:'||i.actor_key) DESC,CASE WHEN json_extract(i.payload,'$.type')='WebcastChatMessage' THEN 1 ELSE 0 END,i.seq LIMIT 1`).get(id,s.generation,now,now,...excludeActors,now);return row?{...row,...JSON.parse(row.payload),generation:row.generation}:null;}
+ deferInbox(seq){const row=this.db.prepare('SELECT attempts,expires_at FROM inbox WHERE seq=?').get(seq);if(!row)return;const delay=Math.min(30000,1000*2**Math.min(row.attempts,5));this.db.prepare('UPDATE inbox SET attempts=attempts+1,retry_at=? WHERE seq=?').run(Math.min(row.expires_at,this.now()+delay),seq);}
  finishInbox(seq){this.db.prepare('DELETE FROM inbox WHERE seq=?').run(seq);}
  actorCount(id,generation){return this.db.prepare('SELECT COUNT(*) AS n FROM actors WHERE session_id=? AND generation=?').get(id,generation).n;}
  freezeLegacyGiftMaps(map,universeId){this.tx(()=>{this.db.prepare("UPDATE sessions SET gift_map=?,gift_map_source='static' WHERE provider='direct' AND gift_map IS NULL").run(JSON.stringify(map));this.db.prepare("UPDATE sessions SET universe_id=? WHERE provider='direct' AND universe_id=''").run(universeId);});}

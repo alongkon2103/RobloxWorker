@@ -230,9 +230,11 @@ function Handlers.event(context)
 			local paused=arena.race.phase=="Lobby" or arena.race.phase=="Countdown"
 			local previousUntil=paused and (eventNow+(entry.model:GetAttribute(boost.Attribute.."PendingSeconds") or 0))
 				or (entry.model:GetAttribute(boost.Attribute.."Until") or 0)
-			if boost.StackMode=="TimedAdditiveSpeed" then
+			if boost.StackMode=="TimedAdditiveSpeed" or boost.StackMode=="TimedMultiplier" then
 				local stacks=previousUntil>eventNow and (entry.model:GetAttribute(boost.Attribute.."Stacks") or 1) or 0
-				entry.model:SetAttribute(boost.Attribute.."Stacks",stacks+effect.count)
+				local nextStacks=stacks+effect.count
+				if boost.StackMode=="TimedMultiplier"then nextStacks=math.min(boost.MaxStacks or 32,nextStacks)end
+				entry.model:SetAttribute(boost.Attribute.."Stacks",nextStacks)
 			end
 			if not paused and previousUntil<=eventNow then entry.model:SetAttribute(boost.Attribute.."StartedAt",eventNow) end
 			local expiresAt

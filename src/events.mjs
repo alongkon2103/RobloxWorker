@@ -28,20 +28,24 @@ export function compactMessage(message){
  }
  return {type,data,sourceId:`${data.socialType==='follow'?'follow':type}:${msgId}`};
 }
+export function joinUsername(message,mode){
+ if(message.type!=='WebcastChatMessage'||typeof message.data?.comment!=='string')return null;
+ const pattern=mode==='plain'?/^([A-Za-z0-9_]{3,20})$/:mode==='both'?/^(?:@\s*)?([A-Za-z0-9_]{3,20})$/:/^@\s*([A-Za-z0-9_]{3,20})$/;
+ return message.data.comment.trim().match(pattern)?.[1]??null;
+}
 export class EventTranslator {
  constructor(store,{resolve,giftMap,maxActors=100,signalInterval=5000}){Object.assign(this,{store,resolve,giftMap,maxActors:Math.min(100,maxActors),signalInterval});}
- async handle(id,generation,message){
+ async handle(id,generation,message,{signal}={}){
   const {type,data:d,sourceId}=message;const s=this.store.get(id);
-  if(s.generation!==generation||['closed','expired'].includes(s.status))return false;
+  if(signal?.aborted||s.generation!==generation||['closed','expired'].includes(s.status))return false;
   const actorKey=`tiktok:${d.user.userId}`;
   let actor=this.store.actor(id,generation,actorKey);
   if(type==='WebcastChatMessage'){
-   const pattern=s.join_mode==='plain'?/^([A-Za-z0-9_]{3,20})$/:s.join_mode==='both'?/^(?:@\s*)?([A-Za-z0-9_]{3,20})$/:/^@\s*([A-Za-z0-9_]{3,20})$/;
-   const command=d.comment.trim().match(pattern);
+   const command=joinUsername(message,s.join_mode);
    if(command){
     if(this.store.seen(id,generation,sourceId))return false;
     if(!actor&&this.store.actorCount(id,generation)>=this.maxActors)return false;
-    const found=await this.resolve(command[1]);if(!found)return false;
+    const found=await this.resolve(command);if(!found||signal?.aborted)return false;
     actor={actorKey,robloxId:String(found.id),robloxUsername:found.name,tiktokUsername:d.user.displayId,tiktokDisplayName:d.user.nickname||d.user.displayId};
     return this.store.enqueue(id,generation,sourceId,{...actor,eventType:'join',effects:[]},{actor,sourceId});
    }
@@ -62,6 +66,7 @@ export class EventTranslator {
    const identity=createHash('sha256').update(JSON.stringify([d.roomId??'',actorKey,sourceId])).digest('hex');
    return this.store.socialEvent(id,generation,actor,sourceId,identity,type==='WebcastLikeMessage'?'like':'follow',d.likeCount);
   }
+  if(s.provider==='direct')return false;
   const bucket=Math.floor(this.store.now()/this.signalInterval);
   const key=`signal:${actorKey}:${bucket}`;
   return this.store.enqueue(id,generation,key,{...actor,eventType:type==='WebcastLikeMessage'?'like':type==='WebcastSocialMessage'?'social':'chat',effects:[]},{sourceId:key});

@@ -23,7 +23,7 @@ let store,manager,server,defaults,closing=false;
 async function shutdown(code=0){
  if(closing)return;closing=true;
  const force=setTimeout(()=>{log({event:'shutdown_timeout'});releaseLock();process.exit(1);},10000);force.unref();
- try{const httpClosed=server?.listening?new Promise(resolve=>{server.close(resolve);server.closeIdleConnections();}):Promise.resolve();await manager?.stop();await httpClosed;await defaults?.stop();store?.close();}
+ try{server?.closePendingPolls();const httpClosed=server?.listening?new Promise(resolve=>{server.close(resolve);server.closeIdleConnections();}):Promise.resolve();await manager?.stop();await httpClosed;await defaults?.stop();store?.close();}
  catch{code=1;}finally{releaseLock();clearTimeout(force);process.exit(code);}
 }
 try{

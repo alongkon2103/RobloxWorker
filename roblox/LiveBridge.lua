@@ -2,6 +2,7 @@
 local Http=game:GetService("HttpService")
 local Players=game:GetService("Players")
 local RunService=game:GetService("RunService")
+local HttpBudget=require(script.Parent.LiveHttpBudget)
 local Bridge={}
 Bridge.__index=Bridge
 local transient={avatar_unavailable=true,join_in_progress=true,handler_failed=true,event_limit=true,spawn_unavailable=true}
@@ -18,6 +19,8 @@ function Bridge.new(config,handlers,options)
   spawn=options.spawn or task.spawn,now=options.now or os.clock,statusCursor=0,
   bridgeKey=options.request and "fake-transport-key" or nil},Bridge)
  self.request=options.request or function(path,method,body,key)
+  local kind=path:match("^/v1/servers/[^/]+/poll$")and "direct_poll"or path:match("^/v1/servers/[^/]+/ack$")and "direct_ack"or "other"
+  HttpBudget.acquire(kind)
   local ok,response=pcall(function()
    return Http:RequestAsync({Url=config.Origin..path,Method=method,
     Headers={["Content-Type"]="application/json",Authorization=typeof(key)=="Secret" and key:AddPrefix("Bearer ") or "Bearer "..key},
@@ -200,18 +203,23 @@ function Bridge:handle(player,s,event)
  local parsed,expires=pcall(DateTime.fromIsoDate,event.expiresAt)
  if not parsed or not expires or expires.UnixTimestampMillis<=DateTime.now().UnixTimestampMillis then return end
  local key=s.id..":"..s.runId..":"..s.generation..":"..event.eventId
- if s.busyEvent then return end
+ local actorScope=s.runId..":"..s.generation..":"..tostring(event.actorKey or event.eventId)
+ s.busyActors=s.busyActors or {}
+ if s.busyActors[actorScope] then return end
  local result=s.done[key]
  if not result then
-  if self.inflight>=8 or s.doneCount>=2000 then return end
-  s.busyEvent=true self.inflight+=1
+  local joining=event.eventType=="join"
+  if (joining and self.inflight>=8) or s.doneCount>=12000 then return end
+  s.busyActors[actorScope]=true
+  if joining then self.inflight+=1 end
   local ok,accepted,reason=pcall(function()
    if event.eventType=="join" then return self.handlers.join(event) end
    if event.eventType=="gift" or event.eventType=="like" or event.eventType=="chat"
     or event.eventType=="follow" or event.eventType=="share" or event.eventType=="social" then return self.handlers.event(event) end
    return false,"unsupported_event"
   end)
-  s.busyEvent=false self.inflight-=1
+  s.busyActors[actorScope]=nil
+  if joining then self.inflight-=1 end
   if self.states[player]~=s or s.resetting or event.runId~=s.runId or event.generation~=s.generation then return end
   reason=ok and reason or "handler_failed"
   result={success=ok and accepted==true,retry=transient[reason]==true,
@@ -220,6 +228,7 @@ function Bridge:handle(player,s,event)
  end
  self.pending[key]={state=s,body={sessionId=s.id,eventId=event.eventId,receipt=event.receipt,
   success=result.success,retry=result.retry}}
+ return result
 end
 function Bridge:flush()
  local batch,keys={},{}
@@ -260,14 +269,62 @@ function Bridge:step()
   end
  end
  if #active==0 then return end
- local sessionIds={}
- for id in byId do table.insert(sessionIds,id) end
- local data,code=self.request("/v1/servers/"..self.jobId.."/poll","POST",{sessionIds=sessionIds},self.bridgeKey)
+ local sessionIds={} local anyBusy=false
+ for id,pair in byId do
+  if pair.state.deliveryBusy then anyBusy=true end
+  if not pair.state.resetting then table.insert(sessionIds,id)end
+ end
+ local waitMs=(anyBusy or next(self.pending)~=nil)and 0 or 10000
+ local data,code={events={}},200
+ if #sessionIds>0 then data,code=self.request("/v1/servers/"..self.jobId.."/poll","POST",{sessionIds=sessionIds,maxEventsPerSession=32,actorQueues=true,maxJoins=math.max(0,8-self.inflight),waitMs=waitMs},self.bridgeKey)end
  if code==200 and data and type(data.events)=="table" then
+  local batches={}
   for i,item in data.events do
    if i>100 then break end
    local pair=byId[item.sessionId]
-   if pair then self.spawn(function() self:handle(pair.player,pair.state,item.event) end) end
+   if pair and type(item.event)=="table" then
+    local event=item.event
+    local actorScope=tostring(event.runId)..":"..tostring(event.generation)..":"..tostring(event.actorKey or event.eventId)
+    pair.state.deliveryActors=pair.state.deliveryActors or {}
+    local batchKey=item.sessionId..":"..actorScope
+    if not pair.state.deliveryActors[actorScope] then
+     local batch=batches[batchKey]
+     if not batch then batch={pair=pair,actorScope=actorScope,events={}}batches[batchKey]=batch end
+     table.insert(batch.events,event)
+    end
+   end
+  end
+  for _,batch in batches do
+   local pair=batch.pair
+   pair.state.deliveryActors[batch.actorScope]=true
+   pair.state.deliveryCount=(pair.state.deliveryCount or 0)+1
+   pair.state.deliveryBusy=true
+   self.spawn(function()
+    local nextIndex=1
+    local ok=pcall(function()
+     for i,event in batch.events do
+      nextIndex=i
+      local result=self:handle(pair.player,pair.state,event)
+      if not result then return end
+      nextIndex=i+1
+      if result.retry and not result.success then return end
+     end
+    end)
+    -- Release the untouched suffix together instead of waiting for its lease to expire.
+    for i=nextIndex,#batch.events do
+     local event=batch.events[i]
+     if type(event)=="table"and event.liveSessionId==pair.state.id and event.runId==pair.state.runId
+      and event.generation==pair.state.generation and event.ownerRobloxId==tostring(pair.player.UserId)
+      and type(event.eventId)=="string"and type(event.receipt)=="string"then
+      self.pending["release:"..event.eventId..":"..event.receipt]={state=pair.state,body={sessionId=pair.state.id,
+       eventId=event.eventId,receipt=event.receipt,success=false,retry=true}}
+     end
+    end
+    pair.state.deliveryActors[batch.actorScope]=nil
+    pair.state.deliveryCount-=1
+    pair.state.deliveryBusy=pair.state.deliveryCount>0
+    if not ok then warn("LiveBridge: delivery batch will retry")end
+   end)
   end
  elseif code==401 or code==403 then
   for _,pair in active do pair.state.status="error" self:publish(pair.player,pair.state,"bridge_unauthorized") end
@@ -302,7 +359,7 @@ function Bridge:start()
   while self.alive do
    local ok=pcall(function() self:step() end)
    if not ok then warn("LiveBridge: receiver step failed; retrying") end
-   task.wait(math.max(1,self.config.PollSeconds or 1))
+   task.wait(.03) -- The shared admission gate controls HTTP rate; no fixed1s delivery delay.
   end
  end)
  game:BindToClose(function()

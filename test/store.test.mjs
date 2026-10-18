@@ -42,3 +42,37 @@ test('expired join clears actor and dependent gifts in poll and prune',()=>{
   const event=s.poll(a.id);assert.equal(event.eventId,'join-2');s.ack(a.id,event.eventId,event.receipt);s.close();
  }
 });
+test('batch delivery preserves FIFO, active leases, join barriers and partial retries',()=>{
+ let now=1000;const s=new Store(':memory:',{now:()=>now,leaseMs:5000});const a=make(s);
+ try{
+  const actor={actorKey:'tiktok:viewer',robloxId:'321'};
+  s.enqueue(a.id,1,'join',{...actor,eventType:'join'},{actor});
+  s.enqueue(a.id,1,'gift',{...actor,eventType:'gift'});
+  s.enqueue(a.id,1,'like',{...actor,eventType:'like'});
+  assert.deepEqual(s.pollBatch(a.id,32).map(e=>e.eventId),['join']);
+  assert.deepEqual(s.pollBatch(a.id,32),[]);
+  now+=5001;const join=s.poll(a.id);s.ack(a.id,join.eventId,join.receipt);
+  const effects=s.pollBatch(a.id,32);assert.deepEqual(effects.map(e=>e.eventId),['gift','like']);
+  s.ack(a.id,effects[0].eventId,effects[0].receipt,{success:false,retry:true});
+  const retry=s.pollBatch(a.id,32);assert.deepEqual(retry.map(e=>e.eventId),['gift']);
+  s.ack(a.id,retry[0].eventId,retry[0].receipt);assert.deepEqual(s.pollBatch(a.id,32),[]);
+  now+=5001;const last=s.poll(a.id);assert.equal(last.eventId,'like');s.ack(a.id,last.eventId,last.receipt);
+  s.enqueue(a.id,1,'before',{eventType:'gift'});s.enqueue(a.id,1,'rejoin',{...actor,eventType:'join'},{actor});s.enqueue(a.id,1,'after',{...actor,eventType:'gift'});
+  const batch=s.pollBatch(a.id,32);assert.deepEqual(batch.map(e=>e.eventId),['before','rejoin']);
+  s.ack(a.id,batch[0].eventId,batch[0].receipt);s.ack(a.id,batch[1].eventId,batch[1].receipt,{success:false,retry:false});
+  assert.deepEqual(s.pollBatch(a.id,32),[]);assert.equal(s.actor(a.id,1,actor.actorKey),null);
+ }finally{s.close();}
+});
+test('existing inbox migration retains raw messages and actor order with bounded retry backoff',async()=>{
+ const {DatabaseSync}=await import('node:sqlite');const dir=mkdtempSync(join(tmpdir(),'inbox-migration-'));const file=join(dir,'db');let now=1000,s;
+ try{
+  s=new Store(file,{now:()=>now});const a=make(s);const message=(sourceId,user)=>({sourceId,type:'WebcastChatMessage',data:{user:{userId:user},comment:'@Runner'}});
+  s.ingest(a.id,1,[message('first','waiting'),message('same-actor','waiting'),message('other-actor','ready')]);s.close();
+  const old=new DatabaseSync(file);old.exec('DROP INDEX inbox_actor; ALTER TABLE inbox DROP COLUMN actor_key; ALTER TABLE inbox DROP COLUMN retry_at; ALTER TABLE inbox DROP COLUMN attempts');old.close();
+  s=new Store(file,{now:()=>now});const first=s.inbox(a.id);assert.equal(first.sourceId,'first');assert.equal(first.data.comment,'@Runner');s.deferInbox(first.seq);
+  assert.equal(s.inbox(a.id).sourceId,'other-actor');s.finishInbox(s.inbox(a.id).seq);assert.equal(s.inbox(a.id),null);
+  now+=1000;assert.equal(s.inbox(a.id).sourceId,'first');
+  for(let i=0;i<7;i++){s.deferInbox(first.seq);const row=s.db.prepare('SELECT retry_at,expires_at FROM inbox WHERE seq=?').get(first.seq);assert.ok(row.retry_at-now<=30000);assert.ok(row.retry_at<=row.expires_at);now=row.retry_at;}
+  assert.equal(s.inbox(a.id),null);assert.equal(s.inboxDepth(a.id),0);
+ }finally{s?.close();rmSync(dir,{recursive:true,force:true});}
+});

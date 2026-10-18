@@ -22,6 +22,8 @@ async function readJSON(req,maxBytes=65536){
  try{const body=JSON.parse(Buffer.concat(chunks).toString('utf8')||'{}');if(!body||typeof body!=='object'||Array.isArray(body))throw new Error();return body;}catch{throw new Fault('invalid_json');}
 }
 export function createAPI(store,config,{log=()=>{},thumbnailFetch=fetch,defaults=null}={}){
+ const pollCursors=new Map();
+ const pendingPolls=new Set();
  const overlays=new Overlays(store.db,()=>store.now());
  const avatars=new AvatarCache({fetcher:thumbnailFetch,now:()=>store.now()});
  const publishOverlay=(key,b,universe)=>{const result=overlays.publish(key,b,universe);avatars.enqueue(b.snapshot.racers.map(r=>r.robloxId));return result;};
@@ -108,14 +110,54 @@ export function createAPI(store,config,{log=()=>{},thumbnailFetch=fetch,defaults
    if(serverMatch&&method==='POST'){
     privileged(config.bridgeKey);rate(`server:${serverMatch[1]}`,240);const body=await readJSON(req),jobId=serverMatch[1];
     if(serverMatch[2]==='poll'){
+     const maxEvents=body.maxEventsPerSession===undefined?1:body.maxEventsPerSession;
+     if(!Number.isInteger(maxEvents)||maxEvents<1||maxEvents>32)throw new Fault('invalid_event_limit');
+     const waitMs=body.waitMs===undefined?0:body.waitMs;
+     if(!Number.isInteger(waitMs)||waitMs<0||waitMs>10000)throw new Fault('invalid_wait');
+     const actorQueues=body.actorQueues===undefined?false:body.actorQueues,maxJoins=body.maxJoins===undefined?8:body.maxJoins;
+     if(typeof actorQueues!=='boolean')throw new Fault('invalid_actor_queues');
+     if(!Number.isInteger(maxJoins)||maxJoins<0||maxJoins>8)throw new Fault('invalid_join_limit');
      let requested=null;
      if(body.sessionIds!==undefined){
       if(!Array.isArray(body.sessionIds)||body.sessionIds.length>100||body.sessionIds.some(id=>typeof id!=='string'||! /^[0-9a-f-]{36}$/.test(id)))throw new Fault('invalid_sessions');
       requested=new Set(body.sessionIds);
       for(const id of requested){if(store.get(id).job_id!==jobId)throw new Fault('job_mismatch',403);}
      }
-     const events=[];for(const s of store.list()){if(s.job_id!==jobId||(requested&&!requested.has(s.id)))continue;const event=store.poll(s.id);if(event)events.push({sessionId:s.id,event});}
-     send(200,{events});return;
+     const selected=()=>store.list().filter(s=>s.job_id===jobId&&(!requested||requested.has(s.id)));
+     const collect=()=>{
+      const sessions=selected();
+      const at=sessions.findIndex(s=>s.id===pollCursors.get(jobId));
+      const fair=at<0?sessions:[...sessions.slice(at+1),...sessions.slice(0,at+1)];
+      const events=[];let last=null,lastJoin=null,remainingJoins=maxJoins;
+      for(let i=0;i<fair.length&&events.length<100;i++){
+       const s=fair[i],limit=Math.min(maxEvents,Math.max(1,Math.floor((100-events.length)/(fair.length-i))));
+       const joinLimit=Math.ceil(remainingJoins/(fair.length-i));
+       const batch=actorQueues?store.pollActorBatch(s.id,limit,{maxJoins:joinLimit}):store.pollBatch(s.id,limit);
+       for(const event of batch){events.push({sessionId:s.id,event});if(actorQueues&&event.eventType==='join'){remainingJoins--;lastJoin=s.id;}}
+       last=s.id;
+      }
+      if(actorQueues&&remainingJoins){
+       for(const s of fair){
+        const limit=Math.min(maxEvents-events.filter(e=>e.sessionId===s.id).length,100-events.length);if(limit<1)continue;
+        for(const event of store.pollActorBatch(s.id,limit,{maxJoins:remainingJoins})){events.push({sessionId:s.id,event});if(event.eventType==='join'){remainingJoins--;lastJoin=s.id;}}
+        if(!remainingJoins||events.length>=100)break;
+       }
+      }
+      if(last){if(!pollCursors.has(jobId)&&pollCursors.size>=store.maxSessions)pollCursors.delete(pollCursors.keys().next().value);pollCursors.set(jobId,actorQueues?(lastJoin??last):last);}else pollCursors.delete(jobId);
+      return events;
+     };
+     let events=collect();
+     const subscribed=new Set(selected().map(s=>s.id));
+     if(!events.length&&waitMs&&subscribed.size)events=await new Promise((resolve,reject)=>{
+      let timer;
+      const finish=(result,error)=>{clearTimeout(timer);store.changes.off('change',changed);res.off('close',closed);pendingPolls.delete(cancel);if(error)reject(error);else resolve(result);};
+      const closed=()=>finish(null),cancel=()=>finish([]);
+      const changed=(id,reason)=>{if(!subscribed.has(id))return;try{const available=reason==='events'||reason==='ack'?collect():[];if(available.length||reason!=='events')finish(available);}catch(error){finish(null,error);}};
+      store.changes.on('change',changed);res.once('close',closed);pendingPolls.add(cancel);
+      if(res.destroyed){closed();return;}
+      timer=setTimeout(()=>finish([]),waitMs);timer.unref();
+     });
+     if(events!==null)send(200,{events});return;
     }
     if(!Array.isArray(body.receipts)||body.receipts.length>100)throw new Fault('invalid_receipts');
     for(const ack of body.receipts){if(!ack||typeof ack!=="object"||typeof ack.sessionId!=="string"||! /^[0-9a-f-]{36}$/.test(ack.sessionId))throw new Fault("invalid_receipts");if(store.get(ack.sessionId).job_id!==jobId)throw new Fault('job_mismatch',403);}
@@ -153,7 +195,8 @@ export function createAPI(store,config,{log=()=>{},thumbnailFetch=fetch,defaults
    throw new Fault('not_found',404);
   }catch(error){const status=error instanceof Fault?error.status:500;if(status===500)log({event:'http_internal_error'});send(status,{error:error instanceof Fault?error.code:'internal_error'});}
  });
- server.on('close',()=>{clearInterval(housekeeping);avatars.close();});return server;
+ server.closePendingPolls=()=>{for(const cancel of pendingPolls)cancel();};
+ server.on('close',()=>{server.closePendingPolls();clearInterval(housekeeping);avatars.close();});return server;
 }
 function validateEffects(effects){
  if(!Array.isArray(effects)||effects.length>200)throw new Fault('invalid_effects');

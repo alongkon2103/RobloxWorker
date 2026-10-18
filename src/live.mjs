@@ -1,11 +1,11 @@
-import {compactMessage} from './events.mjs';
+import {compactMessage,joinUsername} from './events.mjs';
 export function eulerURL(username,key){
  const url=new URL('wss://ws.eulerstream.com');
  for(const [name,value] of Object.entries({uniqueId:username,apiKey:key,'features.schemaVersion':'v2','features.bundleEvents':'true','features.rawMessages':'false','features.normalizeUniqueId':'true'}))url.searchParams.set(name,value);
  return url.toString();
 }
 export class LiveManager {
- constructor(store,translator,config,{Socket=WebSocket,log=()=>{}}={}){Object.assign(this,{store,translator,config,Socket,log});this.connections=new Map();this.processing=new Map();this.stopped=false;this.attemptTimes=[];this.pauseUntil=0;this.lastProcessed=null;}
+ constructor(store,translator,config,{Socket=WebSocket,log=()=>{}}={}){Object.assign(this,{store,translator,config,Socket,log});this.connections=new Map();this.processing=new Map();this.lookups=new Map();this.abort=new AbortController();this.stopped=false;this.attemptTimes=[];this.pauseUntil=0;this.lastProcessed=null;}
  start(){this.store.recover();this.tick();this.timer=setInterval(()=>this.tick(),250);this.pruner=setInterval(()=>this.store.prune(),60000);}
  tick(){
   if(this.stopped)return;
@@ -25,7 +25,7 @@ export class LiveManager {
    const fair=at<0?sessions:[...sessions.slice(at+1),...sessions.slice(0,at+1)];
    for(const s of fair){
     if(this.processing.size>=(this.config.maxProcessing??10))break;
-    if(!this.processing.has(s.id)&&this.store.inbox(s.id)){
+    if(!this.processing.has(s.id)&&this.store.inbox(s.id,this.lookupActors(s.id))){
      const task=this.drain(s.id).catch(()=>this.log({event:'inbox_worker_error',sessionId:s.id})).finally(()=>this.processing.delete(s.id));
      this.processing.set(s.id,task);this.lastProcessed=s.id;
     }
@@ -79,17 +79,31 @@ export class LiveManager {
   const attempts=s.attempts+1,base=code===4404||code===4005||code===1000?30000:code===4429?60000:Math.min(30000,1000*2**Math.min(attempts,5));
   this.store.status(id,[4404,4005,1000].includes(code)?'offline':'retrying',code,this.store.now()+base+Math.floor(Math.random()*1000),attempts);
  }
- async drain(id){
-  const started=performance.now();
-  for(let i=0;i<25&&!this.stopped;i++){
-   const row=this.store.inbox(id);if(!row)return;
-   try{await this.translator.handle(id,row.generation,row);this.store.finishInbox(row.seq);if(performance.now()-started>(this.config.sliceMs??20))return;}
-   catch(error){
-    if(['queue_full','avatar_lookup_unavailable'].includes(error.code)||error.name==='TimeoutError'||error.name==='TypeError')return;
-    if(error.status>=400&&error.status<500){this.log({event:'invalid_ingested_event',sessionId:id});this.store.finishInbox(row.seq);}
-    else{this.log({event:'inbox_processing_retry',sessionId:id});return;}
-   }
+ lookupActors(id){const generation=this.store.get(id).generation;return [...this.lookups.values()].filter(v=>v.id===id&&v.generation===generation).map(v=>v.actorKey);}
+ async processRow(id,row){
+  try{await this.translator.handle(id,row.generation,row,{signal:this.abort.signal});if(this.stopped)return false;this.store.finishInbox(row.seq);return true;}
+  catch(error){
+   if(this.stopped)return false;
+   if(error.code==='queue_full')return false;
+   if(error.status>=400&&error.status<500){this.log({event:'invalid_ingested_event',sessionId:id});this.store.finishInbox(row.seq);}
+   else{this.log({event:'inbox_processing_retry',sessionId:id});this.store.deferInbox(row.seq);}
+   return true;
   }
  }
- async stop(){this.stopped=true;clearInterval(this.timer);clearInterval(this.pruner);for(const [id,c] of this.connections){this.connections.delete(id);clearTimeout(c.timeout);c.socket.close();}await Promise.allSettled(this.processing.values());}
+ async drain(id){
+  const started=performance.now(),waiting=new Set();
+  for(let i=0;i<25&&!this.stopped;i++){
+   const row=this.store.inbox(id,[...this.lookupActors(id),...waiting]);if(!row)return;
+   if(joinUsername(row,this.store.get(id).join_mode)){
+    waiting.add(row.actor_key);
+    // Match the resolver's four network slots without blocking other actors.
+    if(this.lookups.size<4){
+     const task=this.processRow(id,row).catch(()=>this.log({event:'inbox_worker_error',sessionId:id})).finally(()=>this.lookups.delete(row.seq));
+     this.lookups.set(row.seq,{id,generation:row.generation,actorKey:row.actor_key,task});
+    }
+   }else if(!await this.processRow(id,row))return;
+   if(performance.now()-started>(this.config.sliceMs??20))return;
+  }
+ }
+ async stop(){this.stopped=true;this.abort.abort();clearInterval(this.timer);clearInterval(this.pruner);for(const [id,c] of this.connections){this.connections.delete(id);clearTimeout(c.timeout);c.socket.close();}await Promise.allSettled([...this.processing.values(),...[...this.lookups.values()].map(v=>v.task)]);}
 }
