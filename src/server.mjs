@@ -45,7 +45,7 @@ export function createAPI(store,config,{log=()=>{},thumbnailFetch=fetch,defaults
   const send=(status,data)=>{if(res.destroyed)return;res.writeHead(status,{'content-type':'application/json; charset=utf-8','cache-control':'no-store','referrer-policy':'no-referrer','x-content-type-options':'nosniff',...(status===429?{'retry-after':'60'}:{})});res.end(JSON.stringify(data));};
   try{
    const url=new URL(req.url,'http://bridge.internal'),path=url.pathname,method=req.method;
-   if(path==='/healthz'&&method==='GET'){store.db.prepare('SELECT 1').get();send(200,{ok:true,service:'hyperrun-live-bridge',features:{overlay:true,directSocial:true}});return;}
+   if(path==='/healthz'&&method==='GET'){store.db.prepare('SELECT 1').get();send(200,{ok:true,service:'hyperrun-live-bridge',features:{overlay:true,directSocial:true},viewerCapacity:config.maxActors??100});return;}
    const token=req.headers.authorization?.match(/^Bearer ([^\s]+)$/)?.[1];
    const privileged=key=>{if(!constantEqual(token,key))throw new Fault('unauthorized',401);};
    const asset=assets.get(path);
@@ -121,7 +121,7 @@ export function createAPI(store,config,{log=()=>{},thumbnailFetch=fetch,defaults
     const effects=validateEffects(body.effects);
     if(body.eventType==='join'&&effects.length)throw new Fault('invalid_join');
     if(body.eventType!=='join'&&store.actor(s.id,s.generation,actor.actorKey)?.robloxId!==actor.robloxId)throw new Fault('viewer_not_joined',409);
-    if(body.eventType==='join'&&!store.actor(s.id,s.generation,actor.actorKey)&&store.actorCount(s.id,s.generation)>=(config.maxActors??30))throw new Fault('viewer_limit',429);
+    if(body.eventType==='join'&&!store.actor(s.id,s.generation,actor.actorKey)&&store.actorCount(s.id,s.generation)>=(config.maxActors??100))throw new Fault('viewer_limit',429);
     const accepted=store.enqueue(s.id,s.generation,eventID(body.eventId),{...actor,eventType:body.eventType,effects},{actor:body.eventType==='join'?actor:undefined});send(200,{accepted});return;
    }
    const match=path.match(/^\/v1\/sessions\/([0-9a-f-]{36})(?:\/(heartbeat|poll|ack|reset|reconnect|gifts|gift-map|join-mode))?$/);

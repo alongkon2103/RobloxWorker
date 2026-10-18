@@ -8,8 +8,8 @@ export const digest=x=>createHash('sha256').update(x).digest('hex');
 export const constantEqual=(a,b)=>typeof a==='string'&&typeof b==='string'&&timingSafeEqual(Buffer.from(digest(a)),Buffer.from(digest(b)));
 const terminal=['closed','expired'];
 export class Store {
- constructor(file,{now=Date.now,eventTTL=120000,leaseMs=20000,maxQueue=1000,sessionTTL=90000,maxSessions=200,maxInbox=10000}={}){
-  this.now=now;this.eventTTL=eventTTL;this.leaseMs=leaseMs;this.maxQueue=maxQueue;this.sessionTTL=sessionTTL;this.maxSessions=maxSessions;this.maxInbox=maxInbox;
+ constructor(file,{now=Date.now,eventTTL=120000,leaseMs=20000,maxQueue=1000,sessionTTL=90000,maxSessions=200,maxInbox=10000,maxActors=100}={}){
+  this.now=now;this.eventTTL=eventTTL;this.leaseMs=leaseMs;this.maxQueue=maxQueue;this.sessionTTL=sessionTTL;this.maxSessions=maxSessions;this.maxInbox=maxInbox;this.maxActors=Math.min(100,maxActors);
   if(file!==':memory:')mkdirSync(dirname(file),{recursive:true,mode:0o700});
   this.db=new DatabaseSync(file);this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON;
    CREATE TABLE IF NOT EXISTS sessions(id TEXT PRIMARY KEY,token_hash TEXT NOT NULL,owner_id TEXT NOT NULL,job_id TEXT NOT NULL,tiktok TEXT NOT NULL,provider TEXT NOT NULL,status TEXT NOT NULL,run_id TEXT NOT NULL,generation INTEGER NOT NULL,seen_at INTEGER NOT NULL,created_at INTEGER NOT NULL,retry_at INTEGER NOT NULL DEFAULT 0,attempts INTEGER NOT NULL DEFAULT 0,last_code INTEGER,gift_map TEXT);
@@ -67,6 +67,7 @@ export class Store {
  enqueueInside(id,generation,eventId,payload,{actor,sourceId=eventId,giftIdentity=null}={}){
    const s=this.get(id);if(terminal.includes(s.status)||s.generation!==generation)return false;
    if(this.seen(id,generation,sourceId))return false;
+   if(actor&&!this.actor(id,generation,actor.actorKey)&&this.actorCount(id,generation)>=this.maxActors)return false;
    if(giftIdentity&&this.db.prepare('SELECT 1 FROM gift_receipts WHERE universe_id=? AND streamer=? AND source_hash=?').get(s.universe_id,s.tiktok,giftIdentity))return false;
    const depth=this.db.prepare("SELECT COUNT(*) AS n FROM events WHERE session_id=? AND generation=? AND status='pending' AND expires_at>?").get(id,generation,this.now()).n;
    if(depth>=this.maxQueue)throw new Fault('queue_full',429);

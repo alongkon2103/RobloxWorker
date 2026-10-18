@@ -7,6 +7,8 @@ export function compactMessage(message){
  const msgId=idString(d.common?.msgId??d.msgId),userId=idString(d.user?.userId??d.user?.id);
  if(!msgId||!userId)return null;
  const user={userId,displayId:String(d.user.displayId??d.user.uniqueId??userId).slice(0,64)};
+ const nickname=typeof d.user.nickname==='string'?Array.from(d.user.nickname.trim()).slice(0,80).join(''):'';
+ if(nickname)user.nickname=nickname;
  const data={user};
  if(type==='WebcastLikeMessage'){
   const count=Number(d.count??d.likeCount);
@@ -27,7 +29,7 @@ export function compactMessage(message){
  return {type,data,sourceId:`${data.socialType==='follow'?'follow':type}:${msgId}`};
 }
 export class EventTranslator {
- constructor(store,{resolve,giftMap,maxActors=30,signalInterval=5000}){Object.assign(this,{store,resolve,giftMap,maxActors,signalInterval});}
+ constructor(store,{resolve,giftMap,maxActors=100,signalInterval=5000}){Object.assign(this,{store,resolve,giftMap,maxActors:Math.min(100,maxActors),signalInterval});}
  async handle(id,generation,message){
   const {type,data:d,sourceId}=message;const s=this.store.get(id);
   if(s.generation!==generation||['closed','expired'].includes(s.status))return false;
@@ -40,7 +42,7 @@ export class EventTranslator {
     if(this.store.seen(id,generation,sourceId))return false;
     if(!actor&&this.store.actorCount(id,generation)>=this.maxActors)return false;
     const found=await this.resolve(command[1]);if(!found)return false;
-    actor={actorKey,robloxId:String(found.id),robloxUsername:found.name,tiktokUsername:d.user.displayId};
+    actor={actorKey,robloxId:String(found.id),robloxUsername:found.name,tiktokUsername:d.user.displayId,tiktokDisplayName:d.user.nickname||d.user.displayId};
     return this.store.enqueue(id,generation,sourceId,{...actor,eventType:'join',effects:[]},{actor,sourceId});
    }
   }

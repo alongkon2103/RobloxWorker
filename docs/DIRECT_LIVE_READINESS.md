@@ -44,5 +44,6 @@ verify one mapped gift, 20 personal likes and a genuine new Follow reach the
 correct racer. The viewer must be able to Follow; an account already following
 will not generate a new Follow merely by tapping its existing follow state.
 
-For 50+ viewers set `MAX_VIEWERS_PER_STREAM` appropriately; the current default
-is 30. Existing connection, queue and provider plan limits still apply.
+Viewer capacity defaults to 100, with a hard maximum of 100. Migrate older lower
+`MAX_VIEWERS_PER_STREAM` values using `scripts/set-viewer-capacity.mjs` before
+deploying. Existing connection, queue and provider plan limits still apply.

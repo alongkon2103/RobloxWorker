@@ -44,7 +44,7 @@ export function loadConfig(env=process.env){
  const overlays=overlayConfig(env,bridgeKey,adminKey);
  return {...overlays,defaults:defaultsConfig(env,[bridgeKey,adminKey,overlays.overlayServiceKey,...Object.values(overlays.overlayMapKeys)]),port:number('PORT',7435,1,65535),host:env.HOST||'127.0.0.1',dbPath:resolve(env.DB_PATH||'data/bridge.sqlite'),bridgeKey,adminKey,eulerKey,
   giftMap,tikkiesEnabled:env.TIKKIES_ENABLED==='true',maxConnections:number('MAX_LIVE_CONNECTIONS',5,1,100),maxConnectAttempts:number('MAX_CONNECT_ATTEMPTS_PER_MINUTE',5,1,1000),maxProcessing:number('MAX_PROCESSING',10,1,100),
-  maxSessions:number('MAX_SESSIONS',200,1,1000),maxActors:number('MAX_VIEWERS_PER_STREAM',30,1,1000),maxQueue:number('MAX_EVENTS_PER_STREAM',1000,10,100000),
+  maxSessions:number('MAX_SESSIONS',200,1,1000),maxActors:Math.min(100,number('MAX_VIEWERS_PER_STREAM',100,1,1000)),maxQueue:number('MAX_EVENTS_PER_STREAM',1000,10,100000),
   maxInbox:number('MAX_INBOX_PER_STREAM',10000,100,100000),eventTTL:number('EVENT_TTL_MS',120000,10000,3600000),leaseMs:number('DELIVERY_LEASE_MS',20000,5000,120000),
   sessionTTL:number('SESSION_TTL_MS',90000,30000,3600000),connectTimeout:number('CONNECT_TIMEOUT_MS',45000,5000,120000),idleTimeout:number('LIVE_IDLE_TIMEOUT_MS',180000,30000,3600000)};
 }
