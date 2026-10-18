@@ -53,7 +53,7 @@ remote.OnClientEvent:Connect(function(action,ticket,rows,reason)
   local asset=giftIcons[tostring(row.giftId)]
   if type(asset)=="string"and asset:match("^rbxassetid://%d+$")then
    icon.Image=asset
-   icon:GetPropertyChangedSignal("IsLoaded"):Connect(function()fallback.Visible=not icon.IsLoaded end)fallback.Visible=not icon.IsLoaded
+   fallback.Visible=false
   end
   local name=UI.text(line,row.giftName or ("Gift #"..row.giftId),UDim2.fromOffset(62,0),UDim2.new(.52,-62,1,0),12,C.text,true)name.RichText=false
   UI.text(line,"→",UDim2.new(.52,0,0,0),UDim2.new(.08,0,1,0),16,C.muted)

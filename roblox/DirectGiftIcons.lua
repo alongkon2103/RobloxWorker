@@ -1,4 +1,11 @@
--- Real gift images must be uploaded to Roblox first. Key by gift ID, never name.
--- Populate with approved image asset IDs, e.g. ["5655"] = "rbxassetid://<image-id>".
--- Empty entries deliberately show the neutral gift symbol, not a guessed picture.
-return {}
+-- TikTok gift IDs mapped to uploaded Roblox images. Keep ScaleType.Fit in the UI.
+return {
+ ["5487"]="rbxassetid://73939306405585", -- Finger Heart
+ ["5585"]="rbxassetid://127578354023476", -- Confetti
+ ["5586"]="rbxassetid://127765838101214", -- Hearts
+ ["5655"]="rbxassetid://115127546491577", -- Rose
+ ["5658"]="rbxassetid://136204165516902", -- Perfume
+ ["5660"]="rbxassetid://135466927378323", -- Hand Heart
+ ["5879"]="rbxassetid://81365779069219", -- Doughnut
+ ["8913"]="rbxassetid://102893701325909", -- Rosa
+}

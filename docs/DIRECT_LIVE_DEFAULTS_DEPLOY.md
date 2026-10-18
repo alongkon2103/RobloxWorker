@@ -88,10 +88,19 @@ Do not use `reset --hard` or `clean` to solve this error.
 
 `ReplicatedStorage.DirectGiftIcons` maps gift IDs to approved Roblox image asset
 IDs. `LiveSettings` displays those images beside the name using ScaleType.Fit.
-Unmapped or unloaded images show a neutral gift symbol. This does not fetch TikTok
+Unmapped gift IDs show a neutral gift symbol. This does not fetch TikTok
 URLs from the client and does not change the gift/event match.
 
-Current status: image slots are implemented, but the eight real gift images have
-NOT been uploaded. The Studio uploader rejected the TikTok CDN URLs as untrusted.
-Supply local PNG images or approved Roblox image asset IDs before populating
-DirectGiftIcons. Do not describe the fallback symbol as the actual gift picture.
+The eight currently published gift IDs have real PNG icons uploaded to Roblox and
+mapped in DirectGiftIcons. Original PNGs and source metadata are in assets/gifts.
+Images retain their aspect ratio; unknown/new gift IDs use the neutral fallback
+until their image is added.
+
+### Resolve the known stash conflicts from 2026-10-18
+
+If the updater stopped on `src/config.mjs` and `src/server.mjs`, use
+`scripts/resolve-direct-update.mjs` for the exact conflict layout reported.
+It retains upstream Direct defaults and the stashed overlay image CSP, preserves
+all other merged edits, syntax-checks both results and backs up the conflict files
+under ignored `data/`. It refuses other layouts without writing.
+Then mark those two files resolved and run `deploy.sh`. The stash remains intact.
