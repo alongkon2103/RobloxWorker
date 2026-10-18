@@ -88,6 +88,7 @@ function Bridge:giftMappings(player)
  local path=state and "/v1/sessions/"..state.id or "/v1/direct/gift-mappings"
  local data,code=self.request(path,"GET",nil,state and state.token or self.bridgeKey)
  if self.states[player]~=state then return nil,"cancelled" end
+ if (code==404 and not state)or(code==200 and type(data)=="table" and type(data.giftMappings)~="table")then return nil,"worker_update_required" end
  if code~=200 or type(data)~="table" or type(data.giftMappings)~="table" then return nil,data and data.error or "network_error" end
  return data.giftMappings
 end

@@ -26,6 +26,7 @@ UI.text(gifts,"Gift events",UDim2.new(),UDim2.new(1,-100,0,24),15,C.text,true)
 local reload=UI.button(gifts,"Refresh",UDim2.new(1,-94,0,0),UDim2.fromOffset(94,30))
 local giftHint=UI.text(gifts,"",UDim2.fromOffset(0,31),UDim2.new(1,0,0,32),11,C.muted)
 local giftList=Instance.new("Frame")giftList.Name="Mappings"giftList.BackgroundTransparency=1 giftList.Position=UDim2.fromOffset(0,68)giftList.Size=UDim2.new(1,0,0,0)giftList.Parent=gifts
+local giftIcons=require(RS:WaitForChild("DirectGiftIcons"))
 local labels={rainbow_cat="Speed V1",rocket="Rocket",naruto="Naruto",goku="Goku",asta="Asta",speed_boost="Speed Boost",fly="Fly",gojo="Gojo",shield="Shield",octopus="Octopus"}
 local giftRevision,nextGiftRequest,queuedGift=0,0,0
 local function requestGifts()
@@ -39,16 +40,26 @@ end
 reload.Activated:Connect(requestGifts)
 remote.OnClientEvent:Connect(function(action,ticket,rows,reason)
  if action~="gift_mappings"or ticket~=giftRevision or selected~="direct"then return end
- if type(rows)~="table"then giftHint.Text="Gift events unavailable. Press Refresh to try again."return end
+ if type(rows)~="table"then
+  local reasons={worker_update_required="Update the Worker on your VPS, then press Refresh.",connecting="Connecting… Gift events will load when ready.",bridge_not_configured="The game connection is not configured yet.",unauthorized="The game could not verify the Worker connection.",defaults_not_ready="Publish gift defaults in Tikkies Admin first.",defaults_access_denied="The Worker could not verify gift defaults.",direct_only="Switch your active connection to Direct Live to see gift events."}
+  giftHint.Text=reasons[reason]or "Gift events unavailable. Press Refresh to try again."return
+ end
  giftHint.Text=#rows==0 and "No gifts are mapped yet."or player:GetAttribute("LiveEnabled")and "Active gift matches for this Direct Live connection."or "Default gift matches for your next Direct Live connection."
  for _,child in giftList:GetChildren()do child:Destroy()end
  for i,row in rows do
-  local line=Instance.new("Frame")line.BackgroundColor3=i%2==0 and C.raised or C.surface line.BorderSizePixel=0 line.Position=UDim2.fromOffset(0,(i-1)*44)line.Size=UDim2.new(1,0,0,40)line.Parent=giftList UI.corner(line,8)
-  local name=UI.text(line,row.giftName or ("Gift #"..row.giftId),UDim2.fromOffset(10,0),UDim2.new(.52,-10,1,0),12,C.text,true)name.RichText=false
+  local line=Instance.new("Frame")line.BackgroundColor3=i%2==0 and C.raised or C.surface line.BorderSizePixel=0 line.Position=UDim2.fromOffset(0,(i-1)*56)line.Size=UDim2.new(1,0,0,52)line.Parent=giftList UI.corner(line,8)
+  local icon=Instance.new("ImageLabel")icon.Name="GiftImage"icon.BackgroundTransparency=1 icon.Position=UDim2.fromOffset(8,4)icon.Size=UDim2.fromOffset(44,44)icon.ScaleType=Enum.ScaleType.Fit icon.Parent=line
+  local fallback=UI.text(line,"🎁",UDim2.fromOffset(8,4),UDim2.fromOffset(44,44),24,C.muted)fallback.Name="GiftImageFallback"fallback.TextXAlignment=Enum.TextXAlignment.Center
+  local asset=giftIcons[tostring(row.giftId)]
+  if type(asset)=="string"and asset:match("^rbxassetid://%d+$")then
+   icon.Image=asset
+   icon:GetPropertyChangedSignal("IsLoaded"):Connect(function()fallback.Visible=not icon.IsLoaded end)fallback.Visible=not icon.IsLoaded
+  end
+  local name=UI.text(line,row.giftName or ("Gift #"..row.giftId),UDim2.fromOffset(62,0),UDim2.new(.52,-62,1,0),12,C.text,true)name.RichText=false
   UI.text(line,"→",UDim2.new(.52,0,0,0),UDim2.new(.08,0,1,0),16,C.muted)
   UI.text(line,labels[row.eventKey]or row.eventKey,UDim2.new(.6,0,0,0),UDim2.new(.4,-8,1,0),12,C.mint,true)
  end
- giftList.Size=UDim2.new(1,0,0,#rows*44)gifts.Size=UDim2.new(1,0,0,math.max(96,76+#rows*44))
+ giftList.Size=UDim2.new(1,0,0,#rows*56)gifts.Size=UDim2.new(1,0,0,math.max(96,76+#rows*56))
 end)
 local errors={defaults_universe_required="This game connection needs an update. Contact the map owner.",defaults_not_ready="Gift defaults are not ready. Publish them in Tikkies Admin first.",defaults_access_denied="Gift defaults could not be verified. Contact the map owner.",defaults_universe_forbidden="Gift defaults belong to a different game.",previous_connection_closing="Closing your previous connection. Please try again shortly.",invalid_username="Enter a TikTok username, not a link (2–24 characters).",owner_busy="Your previous connection is still closing. Please try again shortly.",live_busy="This TikTok account is connected in another room.",network_error="Connection interrupted. Trying again…",bridge_unauthorized="The game connection could not be verified. Contact the map owner.",bridge_not_configured="The map connection is not configured yet.",tikkies_unavailable="Tikkies is not available yet. Check your map connection.",tikkies_not_configured="The Tikkies map connection has not been set up.",tikkies_unauthorized="Tikkies could not verify this map connection.",tikkies_network_error="Could not reach Tikkies. Retrying…",tikkies_registration_failed="Preparing the Tikkies map connection…",reset_retrying="Preparing a fresh round. Please wait…",handler_failed="Could not connect. Please try again.",disconnect_first="Disconnect before changing your connection.",join_mode_update_failed="Could not update the join format. Please try again."}
 local states={disconnected="Not connected",connecting="Connecting…",queued="Waiting to connect…",live="Connected",offline="Waiting for your TikTok LIVE",retrying="Reconnecting…",error="Connection needs attention",resetting="Preparing the next round…"}

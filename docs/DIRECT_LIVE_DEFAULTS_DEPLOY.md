@@ -73,3 +73,25 @@ Old sessions without stored names show `Gift #ID` until a provider name is obser
 new sessions store the published names with their mapping version.
 The preview endpoint `/v1/direct/gift-mappings` requires the bridge credential;
 session mappings require that session's token. Credentials remain server-only.
+
+### If `git pull` aborts because VPS files have local edits
+
+Do not run `deploy.sh` after an aborted pull: that deploys the previous checkout.
+The helper `scripts/update-worker-safely.sh` saves tracked local edits in a named
+stash, fast-forwards to `origin/main`, reapplies the saved edits, then deploys.
+If reapplying conflicts, it stops without deployment. Keep the reported stash ID
+and resolve the listed files; the original stash is retained as a backup.
+Untracked/ignored files (including `.env` and SQLite data) are not stashed.
+Do not use `reset --hard` or `clean` to solve this error.
+
+### Gift pictures
+
+`ReplicatedStorage.DirectGiftIcons` maps gift IDs to approved Roblox image asset
+IDs. `LiveSettings` displays those images beside the name using ScaleType.Fit.
+Unmapped or unloaded images show a neutral gift symbol. This does not fetch TikTok
+URLs from the client and does not change the gift/event match.
+
+Current status: image slots are implemented, but the eight real gift images have
+NOT been uploaded. The Studio uploader rejected the TikTok CDN URLs as untrusted.
+Supply local PNG images or approved Roblox image asset IDs before populating
+DirectGiftIcons. Do not describe the fallback symbol as the actual gift picture.

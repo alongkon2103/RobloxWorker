@@ -17,5 +17,12 @@ return function(Bridge)
  bridge.request=function()bridge.states[player]=nil return {giftMappings={}},200 end
  rows,reason=bridge:giftMappings(player)
  assert(rows==nil and reason=="cancelled")
+ bridge.states[player]=nil
+ bridge.request=function()return {status="live"},200 end
+ rows,reason=bridge:giftMappings(player)
+ assert(rows==nil and reason=="worker_update_required")
+ bridge.request=function()return {error="not_found"},404 end
+ rows,reason=bridge:giftMappings(player)
+ assert(rows==nil and reason=="worker_update_required")
  return true
 end
