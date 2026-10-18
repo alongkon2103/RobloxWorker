@@ -97,7 +97,7 @@
 +   try{const d=await viewerEvent(tx,run,input.events[i],false,resolved[i],server);deliveries.push({id:d.id,status:d.status});await tx.$executeRawUnsafe('RELEASE SAVEPOINT '+savepoint)}
     catch(error){await tx.$executeRawUnsafe('ROLLBACK TO SAVEPOINT '+savepoint);if(!error.status)throw error;errors.push({clientEventId:input.events[i].clientEventId,error:error.code})}
    }return{deliveries,errors}});
- 
+
   }
 - async function claim(session){return db.$transaction(async tx=>{
 + function validatePollLimit(limit){if(!Number.isInteger(limit)||limit<1||limit>32)throw err(400,'invalid_poll_limit');}
@@ -528,6 +528,82 @@
      "dist": "electron-builder --win --publish never",
      "release": "electron-builder --win --publish always"
    },
+--- a/src/core/tiktok.js
++++ b/src/core/tiktok.js
+@@ -732,7 +732,23 @@
+       totalLikeCount: Number(firstOf(d.totalLikeCount, d.total, 0)) || 0
+     });
+   });
+-  on(WebcastEvent.FOLLOW, d => { debugCapture('follow', d); bus.emit('follow', normUser(d.user || d, d)); });
++  const followIds = new Set();
++  const emitFollow = d => {
++    const labels = [d.common?.displayText?.key, d.common?.displayType, d.displayType];
++    if (labels.some(value => typeof value === 'string' && /unfollow|share/i.test(value))) return;
++    const id = d.common?.msgId;
++    if (id) {
++      const key = String(id);
++      // Some SDKs emit both SOCIAL and FOLLOW for one message.
++      if (followIds.has(key)) return;
++      followIds.add(key);
++      if (followIds.size > DUP_MAX) followIds.delete(followIds.values().next().value);
++    }
++    debugCapture('follow', d);
++    bus.emit('follow', normUser(d.user || d, d));
++  };
++  on(WebcastEvent.FOLLOW, emitFollow);
++  on(WebcastEvent.SOCIAL, d => { if (d.action === 1 || d.action === '1') emitFollow(d); });
+   on(WebcastEvent.SHARE, d => { debugCapture('share', d); bus.emit('share', normUser(d.user || d, d)); });
+   // v2 ใช้ SUB_NOTIFY เป็นเหตุการณ์สมัครสมาชิก (SUBSCRIBE ไม่มีในบางเวอร์ชัน — guard ไว้ทั้งคู่)
+   const onSubscribe = d => bus.emit('subscribe', { ...normUser(d.user || d, d), subMonth: d.subMonth || 1 });
+--- a/src/core/connect.test.js
++++ b/src/core/connect.test.js
+@@ -38,7 +38,7 @@
+
+ // ---- ไลบรารีปลอม ----
+ const WebcastEvent = {
+-  CHAT: 'chat', GIFT: 'gift', LIKE: 'like', FOLLOW: 'follow', SHARE: 'share',
++  CHAT: 'chat', GIFT: 'gift', LIKE: 'like', FOLLOW: 'follow', SHARE: 'share', SOCIAL: 'social',
+   SUBSCRIBE: 'subscribe', SUB_NOTIFY: 'subNotify', MEMBER: 'member',
+   ROOM_USER: 'roomUser', STREAM_END: 'streamEnd',
+ };
+@@ -140,6 +140,37 @@
+     ok('ของขวัญครบชุดผ่าน on() → เข้า bus ครั้งเดียว', counts.gift === 1, counts.gift);
+   }
+
++  // Captured Euler v2 follow: action 1, no displayText.key or displayType.
++  {
++    const c = openConns()[0], follows = [];
++    const onFollow = d => follows.push(d);
++    bus.on('follow', onFollow);
++    const captured = { common: { msgId: 'live-refollow-1' }, action: '1', followCount: 10015,
++      user: { userId: 'fixture-viewer-001', uniqueId: 'fixture_viewer', nickname: 'fixture_viewer' } };
++    c.fire('social', captured);
++    ok('Euler action-only refollow reaches follow bus with original identity', follows.length === 1 && follows[0].uniqueId === 'fixture_viewer' && follows[0].msgId === captured.common.msgId, JSON.stringify(follows));
++    c.fire('follow', captured);
++    ok('SOCIAL then FOLLOW with the same message ID emits once', follows.length === 1, follows.length);
++    const native = { ...captured, common: { msgId: 'native-follow-2' }, action: 1 };
++    c.fire('follow', native);c.fire('social', native);
++    ok('FOLLOW then SOCIAL with numeric action emits once', follows.length === 2, follows.length);
++    c.fire('social', { ...native, common: { msgId: 'another-real-refollow' } });
++    ok('Another follow by the same viewer with a new message ID is preserved', follows.length === 3, follows.length);
++    const beforeIgnored = follows.length;
++    for (const [index, extra] of [
++      { action: '2' }, { action: 0 }, { action: 'unknown' }, { action: undefined },
++      { common: { displayText: { key: 'pm_main_unfollow' } } },
++      { common: { displayText: { key: 'pm_main_share' } } },
++      { common: { displayType: 'SOCIAL_SHARE' } }, { displayType: 'unfollow' },
++    ].entries()) {
++      c.fire('social', { ...captured, ...extra, common: { msgId: 'ignored-social-' + index, ...extra.common } });
++    }
++    ok('Unknown social actions, explicit shares and unfollows do not become follows', follows.length === beforeIgnored, follows.length);
++    c.fire('follow', { ...captured, common: { msgId: 'explicit-unfollow', displayText: { key: 'pm_main_unfollow' } } });
++    ok('Explicit unfollow is rejected even when an SDK mislabels it FOLLOW', follows.length === beforeIgnored, follows.length);
++    bus.off('follow', onFollow);
++  }
++
+   // ---- 3) กดตัดการเชื่อมต่อ ----
+   {
+     await tk.disconnect();
 --- /dev/null
 +++ b/server/src/gameRuntime-batch-ack.test.js
 @@ -0,0 +1,55 @@
@@ -671,7 +747,7 @@
 +ALTER TABLE "GameServerSession" ADD COLUMN "receiptCacheV2" BOOLEAN NOT NULL DEFAULT false;
 --- /dev/null
 +++ b/docs/games-realtime-protocol.md
-@@ -0,0 +1,33 @@
+@@ -0,0 +1,35 @@
 +# Realtime Roblox receiver protocol
 +
 +Registration accepts an optional, strictly allowlisted capability object:
@@ -696,6 +772,8 @@
 +Polling checks pending work every 100ms and rotates owners across batches, including when more than 32 owners have queued events. The advisory owner cursor resets after a backend restart; receipt ownership and capability metadata remain durable. A backend without the pipeline capability continues using empty poll bodies and waits for the current batch to finish before polling again. Batch ACK and pipeline capability are independent; single-ACK backends retain the same bounded actor queues when pipeline support is advertised.
 +
 +Sparse Desktop submissions can flush every 200ms. A two-request upload token bucket replenishes every 375ms to coalesce sustained traffic without exhausting the minute budget in an early burst. A sliding budget limits event requests to 160/minute and ordinary runtime operations to 170/minute, reserving capacity for start/stop/heartbeat through 180 total/minute. The backend retains its 200 authenticated requests/minute ceiling and 1,200 events/minute per run ceiling.
++
++Desktop also accepts Euler v2 `WebcastSocialMessage` follow events with numeric or string `action: 1` when display text is absent. Explicit share/unfollow labels are excluded. SOCIAL and FOLLOW notifications sharing a message ID emit one follow per connection, using a bounded 4,000-ID cache; a new message ID from the same viewer remains a separate follow.
 +
 +## Rollout
 +

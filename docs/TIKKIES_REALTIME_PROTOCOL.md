@@ -23,6 +23,8 @@ Polling checks pending work every 100ms and rotates owners across batches, inclu
 
 Sparse Desktop submissions can flush every 200ms. A two-request upload token bucket replenishes every 375ms to coalesce sustained traffic without exhausting the minute budget in an early burst. A sliding budget limits event requests to 160/minute and ordinary runtime operations to 170/minute, reserving capacity for start/stop/heartbeat through 180 total/minute. The backend retains its 200 authenticated requests/minute ceiling and 1,200 events/minute per run ceiling.
 
+Desktop also accepts Euler v2 `WebcastSocialMessage` follow events with numeric or string `action: 1` when display text is absent. Explicit share/unfollow labels are excluded. SOCIAL and FOLLOW notifications sharing a message ID emit one follow per connection, using a bounded 4,000-ID cache; a new message ID from the same viewer remains a separate follow.
+
 ## Rollout
 
 1. Back up the database, apply migration `20261018120000_receiver_receipt_cache_v2`, and regenerate the Prisma client before deploying the backend.
