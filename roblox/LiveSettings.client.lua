@@ -122,3 +122,71 @@ remote.OnClientEvent:Connect(refresh)refresh()
 local scheduled=0
 for _,attribute in {"LiveEnabled","LiveProvider","LiveGiftMapVersion","LiveStatus"}do player:GetAttributeChangedSignal(attribute):Connect(function()scheduled+=1 local version=scheduled task.delay(2.2,function()if version==scheduled then requestGifts()end end)end)end
 task.delay(1,requestGifts)
+
+-- Opening the supplied guide posters never changes the LIVE connection.
+do
+ local guides={
+  tikkies={th={image="rbxassetid://112142545916610",ratio=1491/1055},en={image="rbxassetid://71832756023478",ratio=1}},
+  direct={th={image="rbxassetid://79344935340389",ratio=1},en={image="rbxassetid://117412900142181",ratio=1}},
+ }
+ local howCard=UI.card(page,42)howCard.Name="HowToCard"howCard.LayoutOrder=0
+ UI.text(howCard,"LIVE connection guide",UDim2.new(),UDim2.new(1,-126,1,-4),12,C.muted)
+ local open=UI.button(howCard,"HOW TO",UDim2.new(1,-120,0,0),UDim2.fromOffset(120,36))open.Name="HowTo"
+ local modal=Instance.new("ScreenGui")modal.Name="LiveHowTo"modal.ResetOnSpawn=false modal.DisplayOrder=UI.gui.DisplayOrder+5 modal.ZIndexBehavior=Enum.ZIndexBehavior.Sibling modal.Enabled=false modal.Parent=UI.gui.Parent
+ local shade=Instance.new("TextButton")shade.Name="Shade"shade.Text=""shade.AutoButtonColor=false shade.BackgroundColor3=Color3.fromRGB(8,25,42)shade.BackgroundTransparency=.22 shade.Size=UDim2.fromScale(1,1)shade.Parent=modal
+ local window=Instance.new("Frame")window.Name="Window"window.AnchorPoint=Vector2.new(.5,.5)window.Position=UDim2.fromScale(.5,.5)window.Size=UDim2.new(1,-20,1,-20)window.BackgroundTransparency=1 window.Active=true window.Parent=shade
+ local limit=Instance.new("UISizeConstraint")limit.MaxSize=Vector2.new(1000,900)limit.Parent=window
+ local art=require(RS:WaitForChild("StreamerUIArt"))
+ local board=Instance.new("ImageLabel")board.Name="IllustratedBoard"board.Image=art.Panel board.BackgroundTransparency=1 board.ScaleType=Enum.ScaleType.Slice board.SliceCenter=Rect.new(222,204,788,802)board.SliceScale=.22 board.Size=UDim2.fromScale(1,1)board.ZIndex=0 board.Parent=window
+ local title=UI.text(window,"HOW TO",UDim2.fromOffset(24,20),UDim2.new(1,-88,0,30),21,C.text,true)
+ local close=UI.button(window,"×",UDim2.new(1,-62,0,18),UDim2.fromOffset(38,34))close.Name="Close"close.TextSize=23
+ local tools=Instance.new("Frame")tools.Name="Controls"tools.BackgroundTransparency=1 tools.Position=UDim2.fromOffset(24,59)tools.Size=UDim2.new(1,-48,0,76)tools.Parent=window
+ local thai=UI.button(tools,"ไทย",UDim2.new(),UDim2.new(.5,-4,0,32))thai.Name="Thai"thai.Font=Enum.Font.GothamBold
+ local english=UI.button(tools,"English",UDim2.new(.5,4,0,0),UDim2.new(.5,-4,0,32))english.Name="English"
+ local minus=UI.button(tools,"−",UDim2.fromOffset(0,40),UDim2.fromOffset(32,30))minus.Name="ZoomOut"
+ local zoomText=UI.text(tools,"100%",UDim2.fromOffset(36,40),UDim2.fromOffset(44,30),13,C.text,true)zoomText.Name="Zoom"zoomText.TextXAlignment=Enum.TextXAlignment.Center
+ local plus=UI.button(tools,"+",UDim2.fromOffset(84,40),UDim2.fromOffset(32,30))plus.Name="ZoomIn"
+ local fit=UI.button(tools,"Fit width",UDim2.new(1,-96,0,40),UDim2.fromOffset(96,30))fit.Name="FitWidth"
+ local view=Instance.new("ScrollingFrame")view.Name="PosterView"view.Position=UDim2.fromOffset(24,139)view.Size=UDim2.new(1,-48,1,-166)view.BackgroundColor3=Color3.fromRGB(8,25,50)view.BorderSizePixel=0 view.ScrollBarThickness=7 view.ScrollBarImageColor3=C.mint view.ScrollingDirection=Enum.ScrollingDirection.XY view.CanvasSize=UDim2.new()view.Parent=window UI.corner(view,8)
+ local poster=Instance.new("ImageLabel")poster.Name="Poster"poster.BackgroundTransparency=1 poster.ScaleType=Enum.ScaleType.Fit poster.Parent=view
+ local loading=UI.text(view,"",UDim2.fromOffset(12,12),UDim2.new(1,-24,0,48),14,Color3.new(1,1,1))loading.Name="Loading"loading.ZIndex=2
+ local language,zoom,guideProvider="th",1,selected
+ local function layout()
+  local width=math.max(1,view.AbsoluteSize.X-12)*zoom
+  local height=width*guides[guideProvider][language].ratio
+  poster.Size=UDim2.fromOffset(width,height)
+  view.CanvasSize=UDim2.fromOffset(width+4,height+4)
+  zoomText.Text=tostring(math.floor(zoom*100+.5)).."%"
+  UI.enabled(minus,zoom>1)UI.enabled(plus,zoom<3)
+ end
+ local function choose(key)
+  language=key zoom=1 view.CanvasPosition=Vector2.zero
+  poster.Image=guides[guideProvider][key].image
+  title.Text="HOW TO · "..(guideProvider=="direct"and "Direct Live"or "Tikkies")
+  loading.Text=key=="th"and "กำลังโหลดรูปคู่มือ…"or "Loading guide…"
+  loading.Visible=not poster.IsLoaded
+  UI.select(thai,key=="th")UI.select(english,key=="en")layout()
+  local asset=poster.Image
+  task.spawn(function()
+   pcall(function()game:GetService("ContentProvider"):PreloadAsync({asset})end)
+   if poster.Image==asset then
+    loading.Visible=not poster.IsLoaded
+    if loading.Visible then loading.Text=key=="th"and "ยังโหลดรูปไม่ได้ ลองเปิดคู่มือใหม่อีกครั้ง"or "Image unavailable. Please reopen the guide to retry."end
+   end
+  end)
+ end
+ local function resizeZoom(value)
+  local previous=zoom zoom=math.clamp(value,1,3)
+  local position=view.CanvasPosition
+  layout()view.CanvasPosition=position*(zoom/previous)
+ end
+ poster:GetPropertyChangedSignal("IsLoaded"):Connect(function()loading.Visible=not poster.IsLoaded end)
+ view:GetPropertyChangedSignal("AbsoluteSize"):Connect(layout)
+ open.Activated:Connect(function()guideProvider=selected choose(language)modal.Enabled=true layout()end)
+ thai.Activated:Connect(function()choose("th")end)english.Activated:Connect(function()choose("en")end)
+ plus.Activated:Connect(function()resizeZoom(zoom+.25)end)minus.Activated:Connect(function()resizeZoom(zoom-.25)end)
+ fit.Activated:Connect(function()resizeZoom(1)view.CanvasPosition=Vector2.zero end)
+ close.Activated:Connect(function()modal.Enabled=false end)shade.Activated:Connect(function()modal.Enabled=false end)
+ page:GetPropertyChangedSignal("Visible"):Connect(function()if not page.Visible then modal.Enabled=false end end)
+ player:GetAttributeChangedSignal("StreamerMenuOpen"):Connect(function()if not player:GetAttribute("StreamerMenuOpen")then modal.Enabled=false end end)
+end
