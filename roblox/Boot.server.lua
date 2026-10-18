@@ -7,6 +7,7 @@ if credentials then
  local private=require(credentials)
  Config.BridgeApiKey=private.BridgeApiKey
  Config.TikkiesCredential=private.TikkiesCredential
+ Config.OverlayMapApiKey=private.OverlayMapApiKey
 end
 local Handlers=require(script.Parent.GameHandlers)
 local Bridge=require(script.Parent.LiveBridge)

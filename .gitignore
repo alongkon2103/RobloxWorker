@@ -6,3 +6,6 @@ logs/
 node_modules/
 *.sqlite*
 *.lock
+
+# Populated server-only credentials stay in Studio.
+roblox/LiveCredentials.lua
