@@ -189,7 +189,7 @@ function Presentation.nameplate(model, viewerName, avatarName)
  tag.Parent = head
  task.defer(function()
   if not tag.Parent or not model.Parent then return end
-  local filtered,success=DisplayName.filter(viewerName,tonumber(model:GetAttribute("OwnerRobloxId")))
+  local filtered,success=DisplayName.filter(viewerName,tonumber(model:GetAttribute("OwnerRobloxId")),nil,model:GetAttribute("ViewerUsername"))
   if tag.Parent and model.Parent then
    if not success then nameInputs[model]=nil end
    name.Text=filtered
