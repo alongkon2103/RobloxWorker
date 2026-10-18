@@ -1,8 +1,9 @@
+import {EFFECT_KEYS} from './effect-keys.mjs';
 import {readFileSync} from 'node:fs';import {resolve} from 'node:path';import {Fault} from './store.mjs';
 export function validateGiftMap(value){
  if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).length>200)throw new Fault('invalid_gift_map');
  const result={};for(const [id,effect] of Object.entries(value)){
-  if(!/^\d{1,20}$/.test(id)||!effect||!['rocket','rainbow_cat','naruto','fly','speed_boost','jump','heal','power'].includes(effect.key)||!Number.isFinite(effect.value)||effect.value<0||effect.value>1e9)throw new Fault('invalid_gift_map');
+  if(!/^\d{1,20}$/.test(id)||!effect||!EFFECT_KEYS.includes(effect.key)||!Number.isFinite(effect.value)||effect.value<0||effect.value>1e9)throw new Fault('invalid_gift_map');
   result[id]={key:effect.key,value:effect.value};
  }return result;
 }
@@ -23,6 +24,16 @@ export function overlayConfig(env,bridgeKey,adminKey){
  if(new Set(keys).size!==keys.length)throw new Error('Overlay service/map credentials must be different from each other and bridge/admin keys');
  return {overlayServiceKey,overlayOrigin,overlayUniverses,overlayMapKeys};
 }
+export function defaultsConfig(env,privilegedKeys){
+ const names=['TIKKIES_DEFAULTS_URL','TIKKIES_DEFAULTS_UNIVERSE_ID','TIKKIES_DEFAULTS_READ_TOKEN'];
+ if(!names.some(k=>env[k]?.trim()))return null;
+ const [url,universeId,token]=names.map(k=>env[k]?.trim());
+ const fail=()=>{throw new Error('Invalid TIKKIES_DEFAULTS configuration; use the pinned HTTPS endpoint, Universe and a separate read token');};
+ if(!/^[1-9]\d{0,15}$/.test(universeId??'')||BigInt(universeId)>9007199254740991n||!token||token.length<32||token.length>256||/\s/.test(token)||privilegedKeys.includes(token))fail();
+ let endpoint;try{endpoint=new URL(url);}catch{fail();}
+ if(endpoint.origin!=='https://backend.aclassstore.com'||endpoint.username||endpoint.password||endpoint.search||endpoint.hash||endpoint.pathname!==`/api/games/defaults/${universeId}/published`)fail();
+ return {url:endpoint.href,universeId,token,refreshMs:60000};
+}
 export function loadConfig(env=process.env){
  const number=(key,fallback,min,max)=>{const n=Number(env[key]??fallback);if(!Number.isInteger(n)||n<min||n>max)throw new Error(`Invalid ${key}`);return n;};
  const key=name=>{const value=env[name];if(!value||value.length<32)throw new Error(`Set ${name} to a random secret of at least32 characters`);return value;};
@@ -30,7 +41,8 @@ export function loadConfig(env=process.env){
  const eulerKey=env.EULER_API_KEY?.trim()||env.EULER_TOKEN?.trim();
  if(!eulerKey)throw new Error('Set EULER_TOKEN (or EULER_API_KEY)');
  let giftMap={};if(env.GIFT_MAP_FILE)giftMap=validateGiftMap(JSON.parse(readFileSync(resolve(env.GIFT_MAP_FILE),'utf8')));
- return {...overlayConfig(env,bridgeKey,adminKey),port:number('PORT',7435,1,65535),host:env.HOST||'127.0.0.1',dbPath:resolve(env.DB_PATH||'data/bridge.sqlite'),bridgeKey,adminKey,eulerKey,
+ const overlays=overlayConfig(env,bridgeKey,adminKey);
+ return {...overlays,defaults:defaultsConfig(env,[bridgeKey,adminKey,overlays.overlayServiceKey,...Object.values(overlays.overlayMapKeys)]),port:number('PORT',7435,1,65535),host:env.HOST||'127.0.0.1',dbPath:resolve(env.DB_PATH||'data/bridge.sqlite'),bridgeKey,adminKey,eulerKey,
   giftMap,tikkiesEnabled:env.TIKKIES_ENABLED==='true',maxConnections:number('MAX_LIVE_CONNECTIONS',5,1,100),maxConnectAttempts:number('MAX_CONNECT_ATTEMPTS_PER_MINUTE',5,1,1000),maxProcessing:number('MAX_PROCESSING',10,1,100),
   maxSessions:number('MAX_SESSIONS',200,1,1000),maxActors:number('MAX_VIEWERS_PER_STREAM',30,1,1000),maxQueue:number('MAX_EVENTS_PER_STREAM',1000,10,100000),
   maxInbox:number('MAX_INBOX_PER_STREAM',10000,100,100000),eventTTL:number('EVENT_TTL_MS',120000,10000,3600000),leaseMs:number('DELIVERY_LEASE_MS',20000,5000,120000),

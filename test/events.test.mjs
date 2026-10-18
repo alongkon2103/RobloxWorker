@@ -26,3 +26,17 @@ test('rejects unacknowledgeable IDs and preserves large string user IDs',()=>{
  const unsafe=chat('ok','@Runner');unsafe.data.user.userId=90071992547409999;assert.equal(compactMessage(unsafe),null);
  assert.equal(compactMessage(chat('ok','@Runner')).data.user.userId,'90071992547409999');
 });
+
+test('gift combo receipts survive round reset, session replacement and SQLite restart',async()=>{
+ const {mkdtempSync,rmSync}=await import('node:fs');const {tmpdir}=await import('node:os');const {join}=await import('node:path');
+ const dir=mkdtempSync(join(tmpdir(),'gift-receipts-'));let s;
+ try{
+  s=new Store(join(dir,'db.sqlite'));let session=make(s);let tr=new EventTranslator(s,{resolve:async()=>({id:'321',name:'Runner'}),giftMap:{99:{key:'gojo',value:1}}});
+  const joinActor=async()=>{await tr.handle(session.id,s.get(session.id).generation,compactMessage(chat('join','@Runner')));const e=s.poll(session.id);s.ack(session.id,e.eventId,e.receipt);};
+  await joinActor();await tr.handle(session.id,1,compactMessage(gift('first',true,3)));let e=s.poll(session.id);s.ack(session.id,e.eventId,e.receipt);
+  s.reset(session.id);await joinActor();await tr.handle(session.id,2,compactMessage(gift('retry',true,3)));assert.equal(s.poll(session.id),null,'Combo replayed after round reset');
+  s.stop(session.id);s.close();s=new Store(join(dir,'db.sqlite'));session=make(s);tr=new EventTranslator(s,{resolve:async()=>({id:'321',name:'Runner'}),giftMap:{99:{key:'gojo',value:1}}});await joinActor();
+  await tr.handle(session.id,1,compactMessage(gift('reconnected',true,3)));assert.equal(s.poll(session.id),null,'Combo replayed after reconnect/restart');
+  const newCombo=gift('new',true,1);newCombo.data.groupId='combo-2';await tr.handle(session.id,1,compactMessage(newCombo));assert.equal(s.poll(session.id).effects[0].key,'gojo');
+ }finally{s?.close();rmSync(dir,{recursive:true,force:true});}
+});

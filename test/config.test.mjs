@@ -27,3 +27,14 @@ test('scoped overlay config validates origin, allowlist and distinct map/service
  for(const value of ['http://example.com','https://example.com/overlay','https://user:pass@example.com','https://example.com/#x'])assert.throws(()=>loadConfig({...env,OVERLAY_PUBLIC_ORIGIN:value}),/ORIGIN/);
  assert.throws(()=>loadConfig({...env,TIKKIES_OVERLAY_UNIVERSES:'100,100'}),/UNIVERSES/);
 });
+
+test('shield can be mapped to a gift',()=>{assert.deepEqual(validateGiftMap({322:{key:'shield',value:1}}),{322:{key:'shield',value:1}});});
+
+test('all ten game keys are accepted by gift maps',()=>{
+ for(const key of ['rainbow_cat','rocket','naruto','goku','asta','speed_boost','fly','gojo','shield','octopus'])assert.deepEqual(validateGiftMap({99:{key,value:1}}),{99:{key,value:1}});
+});
+test('published defaults config pins HTTPS origin, universe and separate credentials',()=>{
+ const env={...base,TIKKIES_DEFAULTS_URL:'https://backend.aclassstore.com/api/games/defaults/10771081714/published',TIKKIES_DEFAULTS_UNIVERSE_ID:'10771081714',TIKKIES_DEFAULTS_READ_TOKEN:'t'.repeat(43)};
+ assert.equal(loadConfig(env).defaults.universeId,'10771081714');
+ for(const patch of [{TIKKIES_DEFAULTS_READ_TOKEN:''},{TIKKIES_DEFAULTS_UNIVERSE_ID:'2'},{TIKKIES_DEFAULTS_URL:'https://other.example/api/games/defaults/10771081714/published'},{TIKKIES_DEFAULTS_READ_TOKEN:base.ADMIN_API_KEY}])assert.throws(()=>loadConfig({...env,...patch}));
+});

@@ -10,9 +10,9 @@ export function compactMessage(message){
  const data={user};
  if(type==='WebcastChatMessage')data.comment=String(d.comment??d.content??'').slice(0,200);
  if(type==='WebcastGiftMessage'){
-  data.giftId=idString(d.giftId);data.giftName=String(d.giftDetails?.giftName??d.giftDetails?.name??d.gift?.name??d.giftName??d.giftId??"").slice(0,80);data.groupId=idString(d.groupId);data.repeatCount=Number(d.repeatCount??1);
+  data.giftId=idString(d.giftId);data.giftName=String(d.giftDetails?.giftName??d.giftDetails?.name??d.gift?.name??d.giftName??d.giftId??"").slice(0,80);data.groupId=idString(d.groupId);data.roomId=idString(d.common?.roomId??d.roomId);data.repeatCount=Number(d.repeatCount??1);
   data.repeatEnd=d.repeatEnd===true||d.repeatEnd===1||d.repeatEnd==='1';
-  data.giftType=Number(d.giftType??d.giftDetails?.giftType??d.giftDetails?.type??d.gift?.type??0);
+  data.giftType=Number(d.giftType??d.giftDetails?.giftType??d.giftDetails?.type??d.gift?.type??NaN);
  }
  return {type,data,sourceId:`${type}:${msgId}`};
 }
@@ -38,10 +38,11 @@ export class EventTranslator {
   if(type==='WebcastGiftMessage'){
    const effect=this.store.effectiveGiftMap(id,this.giftMap)[d.giftId];if(!effect)return false;
    if(!Number.isSafeInteger(d.repeatCount)||d.repeatCount<1||d.repeatCount>10000)throw new Fault('invalid_gift_count');
-   if(d.giftType===1&&!d.repeatEnd)return false;
+   if(!Number.isSafeInteger(d.giftType)||d.giftType<0||d.giftType===1&&!d.repeatEnd)return false;
    const key=d.giftType===1&&d.groupId&&d.groupId!=='0'?`combo:${actorKey}:${d.giftId}:${d.groupId}`:sourceId;
-   const eventId=`gift:${createHash('sha256').update(key).digest('hex')}`;
-   return this.store.enqueue(id,generation,eventId,{...actor,eventType:'gift',giftId:d.giftId,effects:[{key:effect.key,value:effect.value,count:d.repeatCount}]},{sourceId:key});
+   const giftIdentity=createHash('sha256').update(JSON.stringify([d.roomId??'',key])).digest('hex');
+   const eventId=`gift:${giftIdentity}`;
+   return this.store.enqueue(id,generation,eventId,{...actor,eventType:'gift',giftId:d.giftId,effects:[{key:effect.key,value:effect.value,count:d.repeatCount}]},{sourceId:key,giftIdentity});
   }
   const bucket=Math.floor(this.store.now()/this.signalInterval);
   const key=`signal:${actorKey}:${bucket}`;

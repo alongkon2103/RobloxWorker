@@ -1,3 +1,4 @@
+import {PublishedDefaults} from './defaults.mjs';
 import {mkdirSync,openSync,closeSync,readFileSync,writeFileSync,unlinkSync,chmodSync} from 'node:fs';
 import {dirname} from 'node:path';
 import {loadConfig} from './config.mjs';import {Store} from './store.mjs';import {EventTranslator,robloxResolver} from './events.mjs';import {LiveManager} from './live.mjs';import {createAPI} from './server.mjs';
@@ -18,17 +19,18 @@ function acquireLock(){
 }
 try{acquireLock();}catch(error){console.error(error.message);process.exit(1);}
 const releaseLock=()=>{try{if(JSON.parse(readFileSync(lockPath,'utf8')).pid===process.pid)unlinkSync(lockPath);}catch{}};
-let store,manager,server,closing=false;
+let store,manager,server,defaults,closing=false;
 async function shutdown(code=0){
  if(closing)return;closing=true;
  const force=setTimeout(()=>{log({event:'shutdown_timeout'});releaseLock();process.exit(1);},10000);force.unref();
- try{const httpClosed=server?.listening?new Promise(resolve=>{server.close(resolve);server.closeIdleConnections();}):Promise.resolve();await manager?.stop();await httpClosed;store?.close();}
+ try{const httpClosed=server?.listening?new Promise(resolve=>{server.close(resolve);server.closeIdleConnections();}):Promise.resolve();await manager?.stop();await httpClosed;await defaults?.stop();store?.close();}
  catch{code=1;}finally{releaseLock();clearTimeout(force);process.exit(code);}
 }
 try{
  store=new Store(config.dbPath,config);chmodSync(config.dbPath,0o600);
+ if(config.defaults){store.freezeLegacyGiftMaps(config.giftMap,config.defaults.universeId);defaults=new PublishedDefaults(store,config.defaults,{log});await defaults.start();}
  manager=new LiveManager(store,new EventTranslator(store,{resolve:robloxResolver(),giftMap:config.giftMap,maxActors:config.maxActors}),config,{log});
- server=createAPI(store,config,{log});
+ server=createAPI(store,config,{log,defaults});
  server.once('error',error=>{log({event:'listen_error',code:error.code});void shutdown(1);});
  server.listen(config.port,config.host,()=>{manager.start();log({event:'ready',port:config.port,host:config.host});process.send?.('ready');});
 }catch{log({event:'startup_error'});void shutdown(1);}

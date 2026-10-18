@@ -227,3 +227,14 @@ pm2 restart hyperrun-live-bridge --update-env
 Rainbow Cat: map giftId จริงไปยัง `{ "key": "rainbow_cat", "value": 1 }` เกมจะให้ขี่แมวเร็ว ×2.5 นาน 10 วินาที ค่าความเร็วและเวลาแก้ที่ `ReplicatedStorage.RaceEventConfig` ใน Roblox ไม่ใช่ `value` ใน gift map
 
 Naruto: map giftId จริงไปยัง `{ "key": "naruto", "value": 1 }` ค่าในเกมปัจจุบันแปลงร่าง5วินาที เร็ว×7.5 และของขวัญหลายชิ้นต่อเวลาสะสม แก้ที่ `ReplicatedStorage.RaceEventConfig` ต้องอัปเดต bridge รุ่นที่รองรับ `naruto` ก่อนใช้ผ่าน Direct Live
+
+
+## Direct Live: ค่าเริ่มต้นของขวัญจาก Tikkies
+
+ตั้ง `TIKKIES_DEFAULTS_URL`, `TIKKIES_DEFAULTS_UNIVERSE_ID`, `TIKKIES_DEFAULTS_READ_TOKEN` ให้ครบตามไฟล์ส่งต่อของ Tikkies เพื่อเปิดการ sync publication ทุก60วินาที ค่า read token ใช้เฉพาะ backend และต้องแยกจาก bridge/admin/overlay credential เมื่อไม่ตั้งทั้งสามตัวนี้ ระบบไฟล์ GIFT_MAP_FILE เดิมยังทำงานตามเดิม
+
+Direct session ใหม่ต้องส่ง universeId ที่ตรงกับค่าบน Worker และจะเก็บ mapping/version แยกของตน ค่า override ชนะ default; resetสนามหรือ reconnectsocket ไม่เปลี่ยน snapshot ให้ disconnect/connectใหม่เพื่อรับ publicationล่าสุด APIล่มใช้ last-known-good;401/403ระงับsessionใหม่จนอ่านสำเร็จอีกครั้ง โดยจำสถานะนี้ข้ามrestart
+
+API public session มี `universeId`, `giftMapVersion`, `giftMapSource` ส่วนsecretไม่ถูกคืน การ syncไม่ต้องเปิดโปรแกรม Tikkies และไม่ทำให้ Worker รับของขวัญผ่าน Tikkies ซ้ำกับ Euler
+
+ดูคู่มือติดตั้งฉบับเต็ม `docs/DIRECT_LIVE_DEFAULTS_DEPLOY.md` ในชุดส่งต่อ และเก็บ DBเดิมไว้เพื่อรักษาทั้งcache,session snapshotsและreceiptกันของขวัญซ้ำ

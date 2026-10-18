@@ -1,3 +1,4 @@
+import {EFFECT_KEYS} from './effect-keys.mjs';
 import {createHash} from 'node:crypto';
 import {AvatarCache} from './overlay-avatars.mjs';
 import {readFileSync} from 'node:fs';
@@ -12,14 +13,14 @@ function sessionBody(body){
  const tiktokUsername=string(typeof body.tiktokUsername==='string'?body.tiktokUsername.trim().replace(/^@/,'').toLowerCase():null,/^[a-z0-9._]{2,24}$/,'tiktok_username');
  const provider=body.provider??'direct';if(!['direct','tikkies'].includes(provider))throw new Fault('invalid_provider');
  const joinMode=body.joinMode??'at';if(!['at','plain','both'].includes(joinMode))throw new Fault('invalid_join_mode');
- return {joinMode,ownerRobloxId:positiveID(body.ownerRobloxId,'owner_id'),jobId:job(body.jobId),tiktokUsername,provider,giftMap:body.giftMap===undefined?null:validateGiftMap(body.giftMap)};
+ return {universeId:body.universeId===undefined?'':positiveID(body.universeId,'universe_id'),joinMode,ownerRobloxId:positiveID(body.ownerRobloxId,'owner_id'),jobId:job(body.jobId),tiktokUsername,provider,giftMap:body.giftMap===undefined?null:validateGiftMap(body.giftMap)};
 }
 async function readJSON(req,maxBytes=65536){
  if(!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type']??''))throw new Fault('json_required',415);
  let size=0;const chunks=[];for await(const chunk of req){size+=chunk.length;if(size>maxBytes)throw new Fault('body_too_large',413);chunks.push(chunk);}
  try{const body=JSON.parse(Buffer.concat(chunks).toString('utf8')||'{}');if(!body||typeof body!=='object'||Array.isArray(body))throw new Error();return body;}catch{throw new Fault('invalid_json');}
 }
-export function createAPI(store,config,{log=()=>{},thumbnailFetch=fetch}={}){
+export function createAPI(store,config,{log=()=>{},thumbnailFetch=fetch,defaults=null}={}){
  const overlays=new Overlays(store.db,()=>store.now());
  const avatars=new AvatarCache({fetcher:thumbnailFetch,now:()=>store.now()});
  const publishOverlay=(key,b,universe)=>{const result=overlays.publish(key,b,universe);avatars.enqueue(b.snapshot.racers.map(r=>r.robloxId));return result;};
@@ -82,7 +83,8 @@ export function createAPI(store,config,{log=()=>{},thumbnailFetch=fetch}={}){
    if(path==='/v1/sessions'&&method==='POST'){
     privileged(config.bridgeKey);rate('create',120);const body=sessionBody(await readJSON(req));
     if(body.provider==='tikkies'&&!config.tikkiesEnabled)throw new Fault('provider_disabled',403);
-    const created=store.create(body);send(201,{...created,giftMap:store.effectiveGiftMap(created.id,config.giftMap)});return;
+    if(defaults&&body.provider==='direct'&&!body.universeId)throw new Fault('defaults_universe_required');
+    const created=store.create(defaults&&body.provider==='direct'?{...body,...defaults.snapshot(body)}:body);send(201,{...created,giftMap:store.effectiveGiftMap(created.id,config.giftMap)});return;
    }
    if(path==='/v1/admin/sessions'&&method==='GET'){privileged(config.adminKey);send(200,{sessions:store.list().map(view)});return;}
    const serverMatch=path.match(/^\/v1\/servers\/([A-Za-z0-9._-]{1,128})\/(poll|ack)$/);
@@ -138,7 +140,7 @@ export function createAPI(store,config,{log=()=>{},thumbnailFetch=fetch}={}){
 }
 function validateEffects(effects){
  if(!Array.isArray(effects)||effects.length>200)throw new Fault('invalid_effects');
- return effects.map(e=>{if(!e||!['rocket','rainbow_cat','naruto','fly','speed_boost','jump','heal','power'].includes(e.key)||!Number.isFinite(e.value)||e.value<0||e.value>1e9||!Number.isSafeInteger(e.count)||e.count<1||e.count>10000)throw new Fault('invalid_effects');return {key:e.key,value:e.value,count:e.count};});
+ return effects.map(e=>{if(!e||!EFFECT_KEYS.includes(e.key)||!Number.isFinite(e.value)||e.value<0||e.value>1e9||!Number.isSafeInteger(e.count)||e.count<1||e.count>10000)throw new Fault('invalid_effects');return {key:e.key,value:e.value,count:e.count};});
 }
 function acknowledge(store,id,body){
  const eventId=eventID(body.eventId),receipt=string(body.receipt,/^[A-Za-z0-9_-]{1,128}$/,'receipt');
