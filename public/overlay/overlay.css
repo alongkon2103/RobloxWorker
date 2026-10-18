@@ -22,3 +22,13 @@ h1{margin:0;font-size:18px;letter-spacing:.6px;color:var(--mint);text-shadow:0 2
 .weekly h1{color:var(--gold)}.weekly .row{border-left-color:var(--gold)}.weekly .metric{color:var(--gold)}.weekly .rows{height:50px}
 .win-week{font-size:9px;letter-spacing:.7px;margin-top:6px;color:#e1edf8;text-shadow:0 1px 3px #06101f}
 #wins:empty:after{content:"No winners this week"}
+
+/* Applied game effects: one compact broadcast card per viewer action. */
+#overlay:not(.all):not(.events) .game-events,#overlay.events .course,#overlay.events .standings,#overlay.events .velocity,#overlay.events .weekly,#overlay.events #connection{display:none}
+.game-events[hidden]{display:none}.game-events{display:flex;flex-direction:column;gap:7px;padding:0 8px}
+.game-event{--event-accent:var(--mint);display:flex;align-items:center;gap:10px;min-height:49px;width:404px;padding:7px 11px;border:1px solid #f4fbff6b;border-left:3px solid var(--event-accent);background:linear-gradient(100deg,#142139c7,#14213980);box-shadow:0 2px 1px #09132244;animation:event-arrive .24s ease-out}
+.game-event[data-tone="violet"]{--event-accent:var(--violet)}.game-event[data-tone="gold"]{--event-accent:var(--gold)}
+.game-event .event-avatar{width:32px;height:32px;flex-basis:32px;border-color:var(--event-accent);background:var(--event-accent)}
+.game-event-text{flex:1;min-width:0;font-size:12px;line-height:1.45;overflow-wrap:anywhere;color:var(--white);text-shadow:0 1px 2px #06101f}.game-event-text strong{font-weight:800;color:var(--event-accent)}
+@keyframes event-arrive{from{opacity:0;transform:translateX(14px)}to{opacity:1;transform:translateX(0)}}
+@media(prefers-reduced-motion:reduce){.game-event{animation:none}}

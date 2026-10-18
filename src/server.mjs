@@ -26,7 +26,7 @@ export function createAPI(store,config,{log=()=>{},thumbnailFetch=fetch,defaults
  const avatars=new AvatarCache({fetcher:thumbnailFetch,now:()=>store.now()});
  const publishOverlay=(key,b,universe)=>{const result=overlays.publish(key,b,universe);avatars.enqueue(b.snapshot.racers.map(r=>r.robloxId));return result;};
  const assets=new Map();
- for(const [url,file,type] of [["/overlay","index.html","text/html; charset=utf-8"],["/overlay/app.js","app.js","text/javascript; charset=utf-8"],["/overlay/overlay.css","overlay.css","text/css; charset=utf-8"],["/overlay/art.png","art.png","image/png"],["/overlay/marker-layout.js","marker-layout.js","text/javascript; charset=utf-8"],["/overlay/avatar-renderer.js","avatar-renderer.js","text/javascript; charset=utf-8"]]){try{assets.set(url,{data:readFileSync(new URL("../public/overlay/"+file,import.meta.url)),type});}catch{}}
+ for(const [url,file,type] of [["/overlay","index.html","text/html; charset=utf-8"],["/overlay/app.js","app.js","text/javascript; charset=utf-8"],["/overlay/overlay.css","overlay.css","text/css; charset=utf-8"],["/overlay/art.png","art.png","image/png"],["/overlay/marker-layout.js","marker-layout.js","text/javascript; charset=utf-8"],["/overlay/avatar-renderer.js","avatar-renderer.js","text/javascript; charset=utf-8"],["/overlay/event-renderer.js","event-renderer.js","text/javascript; charset=utf-8"]]){try{assets.set(url,{data:readFileSync(new URL("../public/overlay/"+file,import.meta.url)),type});}catch{}}
  // Content-addressed asset names also work when a proxy forces a long browser cache.
  const fingerprint=(path,extension)=>{
   const asset=assets.get(path);if(!asset)return path;
@@ -34,8 +34,8 @@ export function createAPI(store,config,{log=()=>{},thumbnailFetch=fetch,defaults
   const name=path.slice(0,-extension.length)+hash+'.'+extension;
   assets.set(name,{...asset,immutable:true});return name;
  };
- const helper=fingerprint('/overlay/marker-layout.js','js'),avatarHelper=fingerprint('/overlay/avatar-renderer.js','js');
- const app=assets.get('/overlay/app.js');if(app)app.data=Buffer.from(app.data.toString().replace('/overlay/marker-layout.js',helper).replace('/overlay/avatar-renderer.js',avatarHelper));
+ const helper=fingerprint('/overlay/marker-layout.js','js'),avatarHelper=fingerprint('/overlay/avatar-renderer.js','js'),eventHelper=fingerprint('/overlay/event-renderer.js','js');
+ const app=assets.get('/overlay/app.js');if(app)app.data=Buffer.from(app.data.toString().replace('/overlay/marker-layout.js',helper).replace('/overlay/avatar-renderer.js',avatarHelper).replace('/overlay/event-renderer.js',eventHelper));
  const appURL=fingerprint('/overlay/app.js','js'),cssURL=fingerprint('/overlay/overlay.css','css'),artURL=fingerprint('/overlay/art.png','png');
  const html=assets.get('/overlay');if(html)html.data=Buffer.from(html.data.toString().replace('/overlay/app.js',appURL).replace('/overlay/overlay.css',cssURL).replace('/overlay/art.png',artURL));
  const rates=new Map();
@@ -63,7 +63,7 @@ export function createAPI(store,config,{log=()=>{},thumbnailFetch=fetch,defaults
     if(!validID(b.ownerRobloxId)||!validID(b.universeId))throw new Fault('invalid_overlay_claim');
     if(!(config.overlayUniverses??[]).includes(b.universeId))throw new Fault('overlay_universe_forbidden',403);
     const p=overlays.profile(b.ownerRobloxId,b.universeId);
-    const urls=Object.fromEntries(['map','ranking','speed','top-win','all'].map(view=>[view==='top-win'?'topWin':view,config.overlayOrigin+'/overlay?view='+view+'#'+p.readToken]));
+    const urls=Object.fromEntries(['map','ranking','speed','top-win','all','events'].map(view=>[view==='top-win'?'topWin':view,config.overlayOrigin+'/overlay?view='+view+'#'+p.readToken]));
     send(200,{ok:true,schemaVersion:2,ownerRobloxId:b.ownerRobloxId,universeId:b.universeId,online:p.online,urls});return;
    }
    if((path==='/v1/overlays/top-win/result'||path==='/v1/overlays/top-win/board')&&method==='POST'){
@@ -90,7 +90,7 @@ export function createAPI(store,config,{log=()=>{},thumbnailFetch=fetch,defaults
     const results=body.items.map(item=>{try{return publishOverlay(item?.writeToken,{sequence:item?.sequence,snapshot:{...item?.snapshot,...(body.route?{route:body.route}:{})}},universe);}catch(e){return {ok:false,error:e instanceof Fault?e.code:'internal_error'};}});
     send(200,{results});return;
    }
-   if(path==='/v1/overlay/state'&&method==='GET'){const state=overlays.read(token);avatars.enqueue(state.topWin.rows.map(r=>r.robloxId));state.topWin.rows=state.topWin.rows.map(r=>({...r,avatarUrl:avatars.get(r.robloxId)}));if(state.snapshot)state.snapshot={...state.snapshot,racers:state.snapshot.racers.map(r=>({...r,avatarUrl:avatars.get(r.robloxId)}))};send(200,state);return;}
+   if(path==='/v1/overlay/state'&&method==='GET'){const state=overlays.read(token);avatars.enqueue(state.topWin.rows.map(r=>r.robloxId));state.topWin.rows=state.topWin.rows.map(r=>({...r,avatarUrl:avatars.get(r.robloxId)}));if(state.snapshot){avatars.enqueue(state.snapshot.events.map(e=>e.robloxId));state.snapshot={...state.snapshot,racers:state.snapshot.racers.map(r=>({...r,avatarUrl:avatars.get(r.robloxId)})),events:state.snapshot.events.map(e=>({...e,avatarUrl:avatars.get(e.robloxId)}))};}send(200,state);return;}
    const view=s=>({...store.public(s),giftMap:store.effectiveGiftMap(s.id,config.giftMap),giftMappings:s.provider==='direct'?directMappings(store.giftMappings(s.id,config.giftMap)):[]});
    if(path==='/v1/direct/gift-mappings'&&method==='GET'){
     privileged(config.bridgeKey);rate('gift-preview',120);

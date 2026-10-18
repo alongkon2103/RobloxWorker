@@ -2,8 +2,9 @@ import test from 'node:test';import assert from 'node:assert/strict';
 import {readFileSync,writeFileSync,mkdtempSync,mkdirSync,rmSync,existsSync} from 'node:fs';import {spawnSync} from 'node:child_process';import {resolve,join} from 'node:path';import {tmpdir} from 'node:os';
 import {resolveOverlayConflict} from '../scripts/resolve-overlay-update.mjs';
 const block=(a,b)=>`<<<<<<< Updated upstream\n${a}\n=======\n${b}\n>>>>>>> Stashed changes\n`;
+// The resolver recognizes this historical update, not arbitrary future app changes.
 function fixture(root){
- const before=readFileSync('test/fixtures/pre-avatars-app.js.txt','utf8'),current=readFileSync('public/overlay/app.js','utf8'),local=readFileSync('test/fixtures/pre-top-win-app.js.txt','utf8')+'\n// preserve VPS custom edit\n';
+ const before=readFileSync('test/fixtures/pre-avatars-app.js.txt','utf8'),current=readFileSync('test/fixtures/top-win-app.js.txt','utf8'),local=readFileSync('test/fixtures/pre-top-win-app.js.txt','utf8')+'\n// preserve VPS custom edit\n';
  for(const [name,text]of [['base',before],['new',current],['local',local]])writeFileSync(join(root,name),text);
  const merged=spawnSync('git',['merge-file','-p','-L','Updated upstream','-L','BASE','-L','Stashed changes',join(root,'new'),join(root,'base'),join(root,'local')],{encoding:'utf8'});assert.ok(merged.status>0&&merged.status<128,merged.stderr);
  return merged.stdout;
@@ -40,4 +41,10 @@ test('CLI refuses an unrecognized saved avatar renderer without modifying confli
  const result=spawnSync(process.execPath,[resolve('scripts/resolve-overlay-update.mjs'),root,'backup'],{encoding:'utf8'});
  assert.equal(result.status,1);assert.match(result.stderr,/saved avatar renderer differs/);assert.equal(existsSync(join(root,'data')),false);
  }finally{rmSync(root,{recursive:true,force:true});}
+});
+
+test('historical resolver refuses unknown event-feed changes in a conflict',()=>{
+ const original="const view=['map','ranking','speed','all'];";
+ const incoming="import {EventFeed} from '/overlay/event-renderer.js';\n"+original;
+ assert.throws(()=>resolveOverlayConflict('app.js',block(incoming,original)),/Unknown conflict/);
 });

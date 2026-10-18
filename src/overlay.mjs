@@ -5,6 +5,7 @@ const token=()=>randomBytes(32).toString('base64url');
 const finite=(n,min,max)=>typeof n==='number'&&Number.isFinite(n)&&n>=min&&n<=max;
 const text=(s,max)=>typeof s==='string'&&s.length>0&&s.length<=max;
 const id=s=>typeof s==='string'&&/^[1-9]\d{0,15}$/.test(s)&&BigInt(s)<=9007199254740991n;
+const eventEffects=new Set(['rainbow_cat','rocket','naruto','goku','asta','speed_boost','fly','gojo','shield','octopus','power','jump','heal']);
 const tiktokCDNs=['tiktokcdn.com','tiktokcdn-us.com','tiktokcdn-eu.com','byteoversea.com','ibytedtos.com'];
 function tiktokAvatar(value){
  if(typeof value!=='string'||value.length>2048||/[\s\\\u0000-\u001f\u007f]/.test(value)||!/^https:\/\/[^/?#@]+(?:[/?#]|$)/i.test(value))return null;
@@ -22,9 +23,13 @@ export function validateSnapshot(s,hasRoute=false){
   seen.add(r.id);
   for(const e of r.effects)if(!e||!text(e.key,64)||!finite(e.remaining,0,1e9)||!finite(e.tier,-1e6,1e6))throw new Fault('invalid_effect');
  }
+ const events=s.events===undefined?[]:s.events;
+ if(!Array.isArray(events)||events.length>30)throw new Fault('invalid_overlay_event');
+ for(const e of events)if(!e||!text(e.id,200)||!id(e.robloxId)||!text(e.tiktokDisplayName,100)||typeof e.tiktokUsername!=='string'||e.tiktokUsername.length>100||!eventEffects.has(e.effectKey)||!Number.isInteger(e.count)||e.count<1||e.count>10000||!Number.isSafeInteger(e.createdAt)||e.createdAt<=0||(e.tiktokAvatarUrl!==undefined&&!tiktokAvatar(e.tiktokAvatarUrl)))throw new Fault('invalid_overlay_event');
  // Copy only the public presentation fields, never forward arbitrary publisher data.
  return {round:s.round,phase:s.phase,laps:s.laps,metersPerStud:s.metersPerStud,
   ...(s.route?{route:{version:s.route.version,length:s.route.length,points:s.route.points}}:{}),
+  events:events.map(e=>({id:e.id,robloxId:e.robloxId,tiktokDisplayName:e.tiktokDisplayName,tiktokUsername:e.tiktokUsername,effectKey:e.effectKey,count:e.count,createdAt:e.createdAt,...(e.tiktokAvatarUrl!==undefined?{tiktokAvatarUrl:tiktokAvatar(e.tiktokAvatarUrl)}:{})})),
   racers:s.racers.map(r=>{const tiktokAvatarUrl=tiktokAvatar(r.tiktokAvatarUrl);return {id:r.id,robloxId:r.robloxId,name:r.name,distance:r.distance,speed:r.speed,topSpeed:r.speed,rank:r.rank,state:r.state,...(tiktokAvatarUrl?{tiktokAvatarUrl}:{}),effects:r.effects.map(e=>({key:e.key,remaining:e.remaining,tier:e.tier}))};})};
 }
 export class Overlays{
@@ -54,7 +59,7 @@ export class Overlays{
   const p=this.profile(b.ownerRobloxId,b.universeId);
   if(!current||now-current.seen>=45000||current.jobId!==b.jobId||current.claimId!==b.claimId){
    if(!current&&this.live.size>=200)throw new Fault('overlay_capacity',429);
-   this.live.set(scope,{universeId:b.universeId,jobId:b.jobId,claimId:b.claimId,writeToken:token(),seen:now,sequence:0,state:null});
+   this.live.set(scope,{universeId:b.universeId,jobId:b.jobId,claimId:b.claimId,writeToken:token(),seen:now,sequence:0,state:null,eventsAfter:now});
   }
   const l=this.live.get(scope);l.seen=now;
   return {readToken:p.readToken,writeToken:l.writeToken,interval:1,...(b.universeId?{schemaVersion:2,universeId:b.universeId}:{})};
@@ -68,6 +73,7 @@ export class Overlays{
   if(l.lastPublish!==undefined&&this.now()-l.lastPublish<400)throw new Fault('overlay_rate_limited',429);
   if(!Number.isSafeInteger(b?.sequence)||b.sequence<=l.sequence)throw new Fault('stale_overlay_snapshot',409);
   const state=validateSnapshot(b.snapshot,!!l.state?.route),previous=l.state;
+  if(l.lastPublish!==undefined&&this.now()-l.lastPublish>=5000)l.eventsAfter=this.now();
   l.state={...state,route:state.route??previous.route};l.sequence=b.sequence;l.seen=this.now();l.lastPublish=l.seen;
   return {ok:true};
  }
@@ -80,7 +86,9 @@ export class Overlays{
   const scoped=this.db.prepare('SELECT owner_id,universe_id FROM overlay_profiles_v2 WHERE read_token=?').get(key);
   const p=scoped??this.db.prepare('SELECT owner_id FROM overlay_profiles WHERE read_token=?').get(key);if(!p)throw new Fault('unauthorized',401);
   const l=this.live.get(this.scope(p.owner_id,p.universe_id)),age=l?this.now()-l.seen:Infinity;
-  return {topWin:this.topWin.board(p.universe_id??'',p.owner_id),online:!!l&&l.lastPublish!==undefined&&this.now()-l.lastPublish<5000,sequence:l?.sequence??0,ageMs:Number.isFinite(age)?age:null,snapshot:l?.state??null};
+  const online=!!l&&l.lastPublish!==undefined&&this.now()-l.lastPublish<5000;
+  const snapshot=l?.state?{...l.state,events:online?(l.state.events??[]).filter(e=>e.createdAt>=l.eventsAfter&&this.now()-e.createdAt<=12000):[]}:null;
+  return {topWin:this.topWin.board(p.universe_id??'',p.owner_id),online,sequence:l?.sequence??0,ageMs:Number.isFinite(age)?age:null,snapshot};
  }
  sweep(){for(const [key,l]of this.live)if(this.now()-l.seen>300000)this.live.delete(key);}
 }
