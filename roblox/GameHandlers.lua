@@ -455,22 +455,28 @@ function Handlers.devEvent(player, actorKey, eventKey)
 		return false, "invalid_event_key"
 	end
 
-	local session, err = devSession(player, false)
-	if not session then return false, err end
-	local robloxId = session.actors[actorKey]
-	if not robloxId then return false, "dev_actor_not_found" end
-
+	-- Resolve the selected actor only inside this owner's current server-held arena.
 	local arena = arenas[tostring(player.UserId)]
-	if not arena or arena.scope ~= session.scope then
+	local entry = arena and arena.actors[actorKey]
+	if not entry or not entry.model.Parent or entry.humanoid.Health <= 0 then
+		return false, "dev_actor_not_found"
+	end
+	local model = entry.model
+	local runId, generation = model:GetAttribute("RunId"), model:GetAttribute("Generation")
+	if type(runId) ~= "string" or generation == nil or arena.scope ~= runId .. ":" .. tostring(generation) then
 		return false, "dev_session_expired"
 	end
 
 	return Handlers.event({
 		ownerRobloxId = tostring(player.UserId),
-		robloxId = robloxId,
-		runId = session.runId,
-		generation = session.generation,
+		robloxId = entry.robloxId,
+		runId = runId,
+		generation = generation,
 		actorKey = actorKey,
+        namespace = "live",
+        avatarType = model:GetAttribute("AvatarType"),
+        tiktokUsername = model:GetAttribute("ViewerUsername"),
+        tiktokDisplayName = model:GetAttribute("ViewerDisplayName"),
 		eventId = "dev-event-" .. HttpService:GenerateGUID(false),
 		effects = {{key = eventKey, value = 1, count = 1}},
 	})
