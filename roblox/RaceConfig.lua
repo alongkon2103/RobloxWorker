@@ -28,7 +28,7 @@ return {
  TripChance = .20,
  TripInterval = 15,
  TripDuration = 1,
- Laps = 2,
+ Laps = 1,
  ObstaclesEnabled = true,
  PathDrivenMovement = true,
  MaxRunSpeed = 1500,
