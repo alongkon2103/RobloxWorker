@@ -5,6 +5,7 @@ const token=()=>randomBytes(32).toString('base64url');
 const finite=(n,min,max)=>typeof n==='number'&&Number.isFinite(n)&&n>=min&&n<=max;
 const text=(s,max)=>typeof s==='string'&&s.length>0&&s.length<=max;
 const id=s=>typeof s==='string'&&/^[1-9]\d{0,15}$/.test(s)&&BigInt(s)<=9007199254740991n;
+const avatar=r=>r.avatarType==='bacon'?r.robloxId==='0':(r.avatarType===undefined||r.avatarType==='roblox')&&id(r.robloxId);
 const eventEffects=new Set(['rainbow_cat','rocket','naruto','goku','asta','speed_boost','fly','gojo','shield','octopus','power','jump','heal']);
 const tiktokCDNs=['tiktokcdn.com','tiktokcdn-us.com','tiktokcdn-eu.com','byteoversea.com','ibytedtos.com'];
 function tiktokAvatar(value){
@@ -19,18 +20,18 @@ export function validateSnapshot(s,hasRoute=false){
  }else if(!hasRoute)throw new Fault('route_required',409);
  const seen=new Set();
  for(const r of s.racers){
-  if(!r||!text(r.id,200)||seen.has(r.id)||!id(r.robloxId)||!(typeof r.name==='string'&&Array.from(r.name).length>0&&Array.from(r.name).length<=80)||!finite(r.distance,-1e5,1e10)||!finite(r.speed,0,1500)||!finite(r.rank,0,100)||!['Lobby','Waiting','Queued','Countdown','Running','Finished','DNF'].includes(r.state)||!Array.isArray(r.effects)||r.effects.length>32)throw new Fault('invalid_racer');
+  if(!r||!text(r.id,200)||seen.has(r.id)||!avatar(r)||!(typeof r.name==='string'&&Array.from(r.name).length>0&&Array.from(r.name).length<=80)||!finite(r.distance,-1e5,1e10)||!finite(r.speed,0,1500)||!finite(r.rank,0,100)||!['Lobby','Waiting','Queued','Countdown','Running','Finished','DNF'].includes(r.state)||!Array.isArray(r.effects)||r.effects.length>32)throw new Fault('invalid_racer');
   seen.add(r.id);
   for(const e of r.effects)if(!e||!text(e.key,64)||!finite(e.remaining,0,1e9)||!finite(e.tier,-1e6,1e6))throw new Fault('invalid_effect');
  }
  const events=s.events===undefined?[]:s.events;
  if(!Array.isArray(events)||events.length>30)throw new Fault('invalid_overlay_event');
- for(const e of events)if(!e||!text(e.id,200)||!id(e.robloxId)||!text(e.tiktokDisplayName,100)||typeof e.tiktokUsername!=='string'||e.tiktokUsername.length>100||!eventEffects.has(e.effectKey)||!Number.isInteger(e.count)||e.count<1||e.count>10000||!Number.isSafeInteger(e.createdAt)||e.createdAt<=0||(e.tiktokAvatarUrl!==undefined&&!tiktokAvatar(e.tiktokAvatarUrl)))throw new Fault('invalid_overlay_event');
+ for(const e of events)if(!e||!text(e.id,200)||!avatar(e)||!text(e.tiktokDisplayName,100)||typeof e.tiktokUsername!=='string'||e.tiktokUsername.length>100||!eventEffects.has(e.effectKey)||!Number.isInteger(e.count)||e.count<1||e.count>10000||!Number.isSafeInteger(e.createdAt)||e.createdAt<=0||(e.tiktokAvatarUrl!==undefined&&!tiktokAvatar(e.tiktokAvatarUrl)))throw new Fault('invalid_overlay_event');
  // Copy only the public presentation fields, never forward arbitrary publisher data.
  return {round:s.round,phase:s.phase,laps:s.laps,metersPerStud:s.metersPerStud,
   ...(s.route?{route:{version:s.route.version,length:s.route.length,points:s.route.points}}:{}),
-  events:events.map(e=>({id:e.id,robloxId:e.robloxId,tiktokDisplayName:e.tiktokDisplayName,tiktokUsername:e.tiktokUsername,effectKey:e.effectKey,count:e.count,createdAt:e.createdAt,...(e.tiktokAvatarUrl!==undefined?{tiktokAvatarUrl:tiktokAvatar(e.tiktokAvatarUrl)}:{})})),
-  racers:s.racers.map(r=>{const tiktokAvatarUrl=tiktokAvatar(r.tiktokAvatarUrl);return {id:r.id,robloxId:r.robloxId,name:r.name,distance:r.distance,speed:r.speed,topSpeed:r.speed,rank:r.rank,state:r.state,...(tiktokAvatarUrl?{tiktokAvatarUrl}:{}),effects:r.effects.map(e=>({key:e.key,remaining:e.remaining,tier:e.tier}))};})};
+  events:events.map(e=>({id:e.id,robloxId:e.robloxId,...(e.avatarType!==undefined?{avatarType:e.avatarType}:{}),tiktokDisplayName:e.tiktokDisplayName,tiktokUsername:e.tiktokUsername,effectKey:e.effectKey,count:e.count,createdAt:e.createdAt,...(e.tiktokAvatarUrl!==undefined?{tiktokAvatarUrl:tiktokAvatar(e.tiktokAvatarUrl)}:{})})),
+  racers:s.racers.map(r=>{const tiktokAvatarUrl=tiktokAvatar(r.tiktokAvatarUrl);return {id:r.id,robloxId:r.robloxId,...(r.avatarType!==undefined?{avatarType:r.avatarType}:{}),name:r.name,distance:r.distance,speed:r.speed,topSpeed:r.speed,rank:r.rank,state:r.state,...(tiktokAvatarUrl?{tiktokAvatarUrl}:{}),effects:r.effects.map(e=>({key:e.key,remaining:e.remaining,tier:e.tier}))};})};
 }
 export class Overlays{
  constructor(db,now=Date.now){

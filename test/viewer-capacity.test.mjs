@@ -4,12 +4,12 @@ const message=(n,comment='Runner_'+n)=>compactMessage({type:'WebcastChatMessage'
 test('default viewer capacity is 100 with an absolute configured ceiling of 100',()=>{
  assert.equal(loadConfig(env).maxActors,100);assert.equal(loadConfig({...env,MAX_VIEWERS_PER_STREAM:'1000'}).maxActors,100);
 });
-test('100 joined TikTok viewers fit, viewer 101 is rejected, existing viewer can rejoin',async()=>{
+test('100 joined TikTok viewers fit, viewer 101 is rejected, existing real viewer is not rejoined',async()=>{
  const store=new Store(':memory:');try{
   const s=store.create({ownerRobloxId:'1',jobId:'j',tiktokUsername:'live'});const tr=new EventTranslator(store,{resolve:async n=>({id:123,name:n}),giftMap:{}});
   for(let i=1;i<=100;i++)assert.equal(await tr.handle(s.id,1,message(i)),true,'viewer '+i);
   assert.equal(store.actorCount(s.id,1),100);assert.equal(await tr.handle(s.id,1,message(101)),false);assert.equal(store.actorCount(s.id,1),100);
-  const again=message(1);again.sourceId='join-again';assert.equal(await tr.handle(s.id,1,again),true);assert.equal(store.actorCount(s.id,1),100);
+  const again=message(1);again.sourceId='join-again';assert.equal(await tr.handle(s.id,1,again),false);assert.equal(store.actorCount(s.id,1),100);
   assert.equal(store.actor(s.id,1,'tiktok:tik-1').tiktokDisplayName,'ผู้ชม 1');
  }finally{store.close();}
 });
@@ -19,9 +19,9 @@ test('concurrent username lookups cannot overbook the 100th slot',async()=>{
   const results=await Promise.all(Array.from({length:105},(_,i)=>tr.handle(s.id,1,message(i+1))));assert.equal(results.filter(Boolean).length,100);assert.equal(store.actorCount(s.id,1),100);
  }finally{store.close();}
 });
-test('a gift or nickname alone cannot spawn an avatar; a valid Roblox username is required',async()=>{
+test('Tikkies retains explicit Roblox joins without Direct Bacon autojoin',async()=>{
  const store=new Store(':memory:');try{
-  const s=store.create({ownerRobloxId:'1',jobId:'j',tiktokUsername:'live'});const tr=new EventTranslator(store,{resolve:async n=>n==='MissingUser'?null:{id:123,name:n},giftMap:{5655:{key:'rainbow_cat',value:1}}});
+  const s=store.create({ownerRobloxId:'1',jobId:'j',tiktokUsername:'live',provider:'tikkies'});const tr=new EventTranslator(store,{resolve:async n=>n==='MissingUser'?null:{id:123,name:n},giftMap:{5655:{key:'rainbow_cat',value:1}}});
   for(const type of ['WebcastGiftMessage','WebcastLikeMessage','WebcastSocialMessage']){
    const raw={type,data:{common:{msgId:type,displayText:{key:'pm_main_follow_message_viewer'}},user:{userId:'tik-1',displayId:'handle1',nickname:'ผู้ชม 1'},giftId:'5655',giftType:0,repeatCount:1,count:20}};
    assert.equal(await tr.handle(s.id,1,compactMessage(raw)),false);

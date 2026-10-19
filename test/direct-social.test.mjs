@@ -5,7 +5,7 @@ const like=(id,count,user)=>raw('WebcastLikeMessage',id,{count,total:999999},use
 const follow=id=>raw('WebcastSocialMessage',id,{common:{msgId:id,displayText:{key:'pm_main_follow_message_viewer_2'}}});
 async function setup(store,owner='1'){
  const s=store.create({ownerRobloxId:owner,jobId:'j',tiktokUsername:'live'+owner});const tr=new EventTranslator(store,{resolve:async()=>({id:'42',name:'Runner'}),giftMap:{}});
- await tr.handle(s.id,s.generation,compactMessage(raw('WebcastChatMessage','join',{comment:'Runner'})));
+ await tr.handle(s.id,s.generation,compactMessage(raw('WebcastChatMessage','join',{comment:'hello everyone!'})));
  const e=store.poll(s.id);store.ack(s.id,e.eventId,e.receipt);return {s,tr,handle:m=>tr.handle(s.id,store.get(s.id).generation,compactMessage(m))};
 }
 const take=(store,id)=>{const e=store.poll(id);if(e)store.ack(id,e.eventId,e.receipt);return e;};
@@ -40,7 +40,7 @@ test('heart progress persists after database restart, resets with race, and old 
  try{
   store=new Store(join(dir,'db'));const a=await setup(store);await a.handle(like('old19',19));store.close();store=new Store(join(dir,'db'));
   let tr=new EventTranslator(store,{resolve:async()=>({id:'42',name:'Runner'}),giftMap:{}});await tr.handle(a.s.id,1,compactMessage(like('last1',1)));assert.equal(take(store,a.s.id).effects[0].count,1);
-  const next=store.reset(a.s.id);await tr.handle(a.s.id,next.generation,compactMessage(raw('WebcastChatMessage','join2',{comment:'Runner'})));take(store,a.s.id);
+  const next=store.reset(a.s.id);await tr.handle(a.s.id,next.generation,compactMessage(raw('WebcastChatMessage','join2',{comment:'hello everyone!'})));take(store,a.s.id);
   await tr.handle(a.s.id,next.generation,compactMessage(like('old19',19)));await tr.handle(a.s.id,next.generation,compactMessage(like('fresh1',1)));assert.equal(take(store,a.s.id),null);
   await tr.handle(a.s.id,next.generation,compactMessage(like('fresh19',19)));assert.equal(take(store,a.s.id).effects[0].count,1);
  }finally{store?.close();rmSync(dir,{recursive:true,force:true});}
@@ -68,7 +68,7 @@ test('ordinary Direct chat cannot fill the effects queue or delay hearts',async(
 test('100 joined actors chatting and sending two heart waves drain before expiry in bounded batches',async()=>{
  let now=1000;const store=new Store(':memory:',{now:()=>now});try{
   const s=store.create({ownerRobloxId:'1',jobId:'j',tiktokUsername:'live'});const tr=new EventTranslator(store,{resolve:async name=>({id:42,name}),giftMap:{}});
-  for(let i=0;i<100;i++){await tr.handle(s.id,1,compactMessage(raw('WebcastChatMessage','join-'+i,{comment:'@Runner'},'viewer'+i)));take(store,s.id);}
+  for(let i=0;i<100;i++){await tr.handle(s.id,1,compactMessage(raw('WebcastChatMessage','join-'+i,{comment:'hello everyone!'},'viewer'+i)));take(store,s.id);}
   for(let wave=0;wave<2;wave++)for(let i=0;i<100;i++){
    await tr.handle(s.id,1,compactMessage(raw('WebcastChatMessage','chat-'+wave+'-'+i,{comment:'Go go!!'},'viewer'+i)));
    await tr.handle(s.id,1,compactMessage(like('hearts-'+wave+'-'+i,20,'viewer'+i)));
@@ -78,15 +78,15 @@ test('100 joined actors chatting and sending two heart waves drain before expiry
  }finally{store.close();}
 });
 
-test('real Euler v2 action-only follows award Fly once without using broadcaster followCount',async()=>{
- const store=new Store(':memory:');try{
+test('real Euler v2 action-only follows award Fly with the channel cooldown without using broadcaster followCount',async()=>{
+ let now=1000;const store=new Store(':memory:',{now:()=>now});try{
   const a=await setup(store);
   for(const [id,action]of [['wire-string','1'],['wire-number',1]]){
    const message=raw('WebcastSocialMessage',id,{action,followCount:10015});
    const normalized=compactMessage(message);assert.equal(normalized.data.socialType,'follow');
    await a.handle(message);const e=take(store,a.s.id);assert.equal(e.eventType,'follow');
    assert.deepEqual(e.effects,[{key:'fly',value:1,count:1}]);
-   await a.handle(message);assert.equal(take(store,a.s.id),null);
+   await a.handle(message);assert.equal(take(store,a.s.id),null);now+=600000;
   }
   for(const [id,extra]of [['share',{action:'3'}],['unknown',{action:'99'}],
    ['unfollow',{action:'1',displayType:'unfollow'}],['share-label',{action:'1',displayType:'share'}]]){

@@ -21,7 +21,9 @@ Direct Follow and 20-like rules are game defaults in `src/direct-rules.mjs`;
 the current Tikkies published contract exports gifts only. Changing Tikkies
 Desktop's own follow/like rules does not change these Direct defaults.
 
-Viewers must first enter their Roblox username in chat to create their racer.
+Since the [Direct Bacon update](DIRECT_BACON_PARTICIPATION.md), the first chat or
+any gift creates a Bacon racer. A later valid Roblox username upgrades that same
+racer. Follow rewards have a durable 600-second viewer/channel cooldown.
 Likes use the sender's packet count, never the room total. Each viewer has an
 independent remainder. Progress survives Worker restart and resets with the race.
 Duplicate social packets are suppressed across race resets for the receipt

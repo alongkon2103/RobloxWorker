@@ -39,14 +39,17 @@ local function updateRows(list)
   if not row then
    local frame=Instance.new("Frame")frame.BackgroundTransparency=1 frame.Size=UDim2.new(1,-28,0,50)frame.Parent=rosterCard
    local rank=UI.text(frame,"",UDim2.new(),UDim2.fromOffset(25,50),13,C.gold,true)
-   local image=Instance.new("ImageLabel")image.Position=UDim2.fromOffset(31,7)image.Size=UDim2.fromOffset(36,36)image.BackgroundColor3=C.raised image.Image="rbxthumb://type=AvatarHeadShot&id="..tostring(m:GetAttribute("RobloxId")or 1).."&w=150&h=150"image.Parent=frame UI.corner(image,18)
+   local image=Instance.new("ImageLabel")image.Position=UDim2.fromOffset(31,7)image.Size=UDim2.fromOffset(36,36)image.BackgroundColor3=C.raised image.Image=""image.Parent=frame UI.corner(image,18)
    local name=UI.text(frame,"",UDim2.fromOffset(79,4),UDim2.new(1,-166,0,22),13,C.text,true)name.TextWrapped=false name.TextTruncate=Enum.TextTruncate.AtEnd
    local meta=UI.text(frame,"",UDim2.fromOffset(79,26),UDim2.new(1,-166,0,17),10,C.muted)
    local speed=UI.text(frame,"",UDim2.new(1,-83,0,9),UDim2.fromOffset(83,31),12,C.mint,true)speed.TextXAlignment=Enum.TextXAlignment.Right
-   row={frame=frame,rank=rank,name=name,meta=meta,speed=speed}rowViews[m]=row
+   row={frame=frame,rank=rank,name=name,meta=meta,speed=speed,image=image}rowViews[m]=row
   end
   row.frame.Position=UDim2.fromOffset(14,10+(i-1)*54)row.rank.Text=tostring(m:GetAttribute("RaceRank")or i)
-  row.name.Text=m:GetAttribute("ViewerRobloxUsername")or m:GetAttribute("ViewerUsername")or m.Name
+  row.name.Text=m:GetAttribute("ViewerDisplayName")or m:GetAttribute("ViewerUsername")or "Viewer"
+  local id=tonumber(m:GetAttribute("RobloxId"))or 0
+  local portrait=id>0 and("rbxthumb://type=AvatarHeadShot&id="..tostring(id).."&w=150&h=150")or ""
+  if row.image.Image~=portrait then row.image.Image=portrait end
   local state=m:GetAttribute("RaceState")or "Waiting"row.meta.Text=state=="Running"and("LAP "..(m:GetAttribute("RaceLap")or 1).." / "..(m:GetAttribute("RaceLaps")or 2))or state
   row.speed.Text=math.floor((m:GetAttribute("RouteSpeed")or 0)*(player:GetAttribute("ViewerMetersPerStud")or .28)*3.6+.5).." km/h"
  end

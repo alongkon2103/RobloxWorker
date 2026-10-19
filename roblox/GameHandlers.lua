@@ -2,6 +2,8 @@
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local Handlers = {}
+local Avatar=require(script.Parent.ViewerAvatar)
+local Motion=require(script.Parent.ViewerMotion)
 local Events=require(game.ReplicatedStorage.RaceEventConfig)
 local GiftRosterInfo=require(game.ReplicatedStorage.GiftRosterInfo)
 local Config = require(script.Parent.RaceConfig)
@@ -37,7 +39,11 @@ end
 
 local function identity(context)
 	local ownerId, robloxId = tonumber(context.ownerRobloxId), tonumber(context.robloxId)
-	if not ownerId or not robloxId or ownerId <= 0 or robloxId <= 0
+ local bacon=context.avatarType=="bacon"and robloxId==0 and context.namespace=="live"
+  and type(context.actorKey)=="string"and context.actorKey:match("^tiktok:")
+ if context.avatarType~=nil and context.avatarType~="bacon"and context.avatarType~="roblox"then return nil end
+ if context.avatarType=="bacon"and not bacon then return nil end
+	if not ownerId or not robloxId or ownerId <= 0 or (robloxId <= 0 and not bacon)
 		or ownerId % 1 ~= 0 or robloxId % 1 ~= 0
 		or type(context.runId) ~= "string" or context.generation == nil
 		or type(context.actorKey) ~= "string" or not context.actorKey:match("^%a+:.+") then
@@ -46,6 +52,45 @@ local function identity(context)
 	return tostring(ownerId), tostring(robloxId), context.runId .. ":" .. tostring(context.generation)
 end
 
+
+local function upgradeAvatar(arena,entry,context,robloxId,owner)
+ if entry.avatarLoading then return false,"join_in_progress"end
+ entry.avatarLoading=true
+ local began=os.clock()
+ local ok,prepared=pcall(Avatar.roblox,tonumber(robloxId))
+ if not ok or os.clock()-began>10 then
+  if ok then prepared:Destroy()end entry.avatarLoading=nil return false,"avatar_unavailable"
+ end
+ if arenas[tostring(owner.UserId)]~=arena or arena.actors[context.actorKey]~=entry
+  or not owner.Parent or not entry.model.Parent or entry.humanoid.Health<=0
+  or arena.race.destroyed or arena.race.phase=="Results"
+  or entry.model:GetAttribute("RaceState")=="Finished"or entry.model:GetAttribute("RaceState")=="DNF"then
+  prepared:Destroy()entry.avatarLoading=nil return false,"stale_round"
+ end
+ local normalized=pcall(Presentation.scaleAvatar,prepared)
+ if not normalized then prepared:Destroy()entry.avatarLoading=nil return false,"avatar_unavailable"end
+ -- Loading happens offstage; the original Bacon keeps moving until this non-yielding swap.
+ if entry.motion then entry.motion:destroy()end
+ entry.humanoid=Avatar.replace(entry.model,prepared)
+ entry.robloxId=robloxId entry.username=context.robloxUsername or robloxId
+ entry.model.Name="Viewer_"..robloxId
+ entry.model:SetAttribute("RobloxId",robloxId)entry.model:SetAttribute("AvatarType","roblox")
+ entry.model:SetAttribute("ViewerRobloxUsername",entry.username)
+ entry.model:SetAttribute("AvatarNormalized",nil)Presentation.scaleAvatar(entry.model)
+ entry.routeHeight=-Presentation.bodyBounds(entry.model).Y+.08
+ entry.model:SetAttribute("RouteHeight",entry.routeHeight)
+ entry.humanoid:SetStateEnabled(Enum.HumanoidStateType.FallingDown,false)
+ entry.humanoid:SetStateEnabled(Enum.HumanoidStateType.Ragdoll,false)
+ entry.humanoid.Sit=false entry.humanoid.PlatformStand=false
+ entry.humanoid:ChangeState(Enum.HumanoidStateType.Running)
+ for _,part in entry.model:GetDescendants()do if part:IsA("BasePart")then part.CollisionGroup="ViewerRacers"end end
+ local animated,motion=pcall(Motion.attach,entry.model,Config)
+ if animated then entry.motion=motion else entry.motion=nil warn("Avatar upgraded; run animation will need reloading")end
+ entry.model:SetAttribute("AvatarRevision",(entry.model:GetAttribute("AvatarRevision")or 0)+1)
+ Presentation.nameplate(entry.model,context.tiktokDisplayName or context.tiktokUsername,entry.username)
+ entry.avatarLoading=nil entry.lastSeen=os.clock()
+ return true
+end
 
 function Handlers.join(context)
 	local ownerId, robloxId, scope = identity(context)
@@ -81,6 +126,10 @@ function Handlers.join(context)
         Presentation.nameplate(existing.model,context.tiktokDisplayName or context.tiktokUsername or existing.username,existing.username)
 		return true
 	end
+ if existing and existing.model.Parent and existing.humanoid.Health>0
+  and existing.model:GetAttribute("AvatarType")=="bacon"and context.avatarUpdate==true and robloxId~="0"then
+  return upgradeAvatar(arena,existing,context,robloxId,owner)
+ end
 	if arena.joining[context.actorKey] then return false, "join_in_progress" end
 	-- A superseded or dead avatar frees its slot before reserving the replacement.
 	if existing then
@@ -98,13 +147,13 @@ function Handlers.join(context)
 	npcCount = npcCount + 1 -- Reserve before the avatar request yields.
 	local reservation={released=false} arena.pending[context.actorKey]=reservation
 	local began = os.clock()
-	local ok, model = pcall(Players.CreateHumanoidModelFromUserIdAsync, Players, tonumber(robloxId))
+	local ok, model = pcall(function()if context.avatarType=="bacon"then return Avatar.bacon()end return Avatar.roblox(tonumber(robloxId))end)
 	if ok then reservation.model=model end
-	local humanoid = ok and model:FindFirstChildOfClass("Humanoid")
-	local root = ok and model:FindFirstChild("HumanoidRootPart")
+	local humanoid = ok and model and model:FindFirstChildOfClass("Humanoid")
+	local root = ok and model and model:FindFirstChild("HumanoidRootPart")
 	if not ok or not humanoid or not root or os.clock() - began > 10
 		or arenas[ownerId] ~= arena or not Players:GetPlayerByUserId(tonumber(ownerId)) then
-		if ok then model:Destroy() end
+		if ok and model then model:Destroy() end
 		arena.joining[context.actorKey] = nil arena.pending[context.actorKey]=nil
 		release(reservation)
 		return false, "avatar_unavailable"
@@ -123,9 +172,10 @@ function Handlers.join(context)
 	model:SetAttribute("Generation", tostring(context.generation))
 	model:SetAttribute("ActorKey", context.actorKey)
 	model:SetAttribute("RobloxId", robloxId)
+ model:SetAttribute("AvatarType",context.avatarType or "roblox")
 	model:SetAttribute("Power", 0)
 	model:SetAttribute("ViewerUsername", context.tiktokUsername or context.robloxUsername or robloxId)
-	model:SetAttribute("ViewerRobloxUsername", context.robloxUsername or robloxId)
+	model:SetAttribute("ViewerRobloxUsername", context.avatarType=="bacon"and ""or(context.robloxUsername or robloxId))
 	for _, descendant in ipairs(model:GetDescendants()) do
 		if descendant:IsA("BaseScript") then descendant:Destroy() end
 	end

@@ -16,7 +16,7 @@ function Results.payload(owner,model,raceId,jobId,now)
  if provider~='direct'and provider~='tikkies'then return nil end
  if provider=='direct'and channel==''then return nil end
  return {ownerRobloxId=tostring(owner.UserId),jobId=jobId,raceId=raceId,actorKey=actor,
-  name=model:GetAttribute('ViewerDisplayName')or 'Viewer',robloxId=tostring(model:GetAttribute('RobloxId')),
+  name=model:GetAttribute('ViewerDisplayName')or 'Viewer',robloxId=tostring(model:GetAttribute('RobloxId')),avatarType=model:GetAttribute('AvatarType'),
   provider=provider,channel=channel,finishedAt=now}
 end
 local function persist(id,b)

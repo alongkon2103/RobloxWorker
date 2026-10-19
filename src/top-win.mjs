@@ -2,6 +2,7 @@ import {Fault} from './store.mjs';
 const day=86400000,thai=7*3600000;
 const text=(x,n)=>typeof x==='string'&&x.length>0&&x.length<=n;
 const id=x=>typeof x==='string'&&/^[1-9]\d{0,15}$/.test(x)&&BigInt(x)<=9007199254740991n;
+const avatar=r=>r.avatarType==='bacon'?r.robloxId==='0':(r.avatarType===undefined||r.avatarType==='roblox')&&id(r.robloxId);
 export function weekAt(time){
  const d=new Date(time+thai),days=(d.getUTCDay()+6)%7;
  const start=Date.UTC(d.getUTCFullYear(),d.getUTCMonth(),d.getUTCDate()-days)-thai;
@@ -22,7 +23,7 @@ export class TopWin{
   this.db.prepare('INSERT INTO top_win_channels VALUES(?,?,?,?) ON CONFLICT(universe_id,owner_id) DO UPDATE SET provider=excluded.provider,channel=excluded.channel').run(universe,owner,provider,channel);
  }
  record(universe,b){
-  if(!b||!id(b.ownerRobloxId)||!text(b.jobId,128)||!text(b.raceId,160)||!text(b.actorKey,160)||! /^(?:tiktok|live):[A-Za-z0-9._-]+$/.test(b.actorKey)||!(typeof b.name==='string'&&Array.from(b.name).length>0&&Array.from(b.name).length<=80)||!id(b.robloxId)||!Number.isSafeInteger(b.finishedAt)||b.finishedAt>this.now()+30000||b.finishedAt<this.now()-7*day)throw new Fault('invalid_win');
+  if(!b||!id(b.ownerRobloxId)||!text(b.jobId,128)||!text(b.raceId,160)||!text(b.actorKey,160)||! /^(?:tiktok|live):[A-Za-z0-9._-]+$/.test(b.actorKey)||!(typeof b.name==='string'&&Array.from(b.name).length>0&&Array.from(b.name).length<=80)||!avatar(b)||!Number.isSafeInteger(b.finishedAt)||b.finishedAt>this.now()+30000||b.finishedAt<this.now()-7*day)throw new Fault('invalid_win');
   const channel=channelFor(b.provider,b.channel,b.ownerRobloxId),week=weekAt(b.finishedAt).start;
   this.db.exec('BEGIN IMMEDIATE');try{
    const receipt=this.db.prepare('INSERT INTO top_win_receipts VALUES(?,?,?,?,?) ON CONFLICT DO NOTHING').run(universe,b.ownerRobloxId,b.jobId,b.raceId,b.finishedAt);
@@ -36,6 +37,6 @@ export class TopWin{
  board(universe,owner){
   const week=weekAt(this.now()),scope=this.db.prepare('SELECT * FROM top_win_channels WHERE universe_id=? AND owner_id=?').get(universe,owner);
   const rows=scope?this.db.prepare('SELECT actor_id AS id,name,roblox_id AS robloxId,wins FROM top_win_scores WHERE universe_id=? AND owner_id=? AND provider=? AND channel=? AND week=? ORDER BY wins DESC,last_win ASC,actor_id ASC LIMIT 10').all(universe,owner,scope.provider,scope.channel,week.start):[];
-  return {title:'TOP WIN',week:week.start,nextResetAt:week.nextResetAt,channel:scope?.channel??null,rows};
+  return {title:'TOP WIN',week:week.start,nextResetAt:week.nextResetAt,channel:scope?.channel??null,rows:rows.map(r=>r.robloxId==='0'?{...r,avatarType:'bacon'}:r)};
  }
 }

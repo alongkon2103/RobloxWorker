@@ -122,6 +122,8 @@ function Presentation.nameplate(model, viewerName, avatarName)
  name.TextColor3=palette[1]=="MIDNIGHT" and Color3.new(1,1,1) or Color3.fromRGB(43,35,62)
  local avatar=text(card,"RobloxUsername","Roblox: "..tostring(avatarName or ""),11,UDim2.fromOffset(50,28),name.TextColor3)
  avatar.Size=UDim2.new(1,-75,0,15)avatar.Font=Enum.Font.GothamMedium avatar.RichText=false
+ avatar.Visible=model:GetAttribute("AvatarType")~="bacon"
+ if not avatar.Visible then name.Position=UDim2.fromOffset(50,12)end
  local speed = Instance.new("TextLabel")
  speed.Name="RunnerSpeed"
  speed.AnchorPoint=Vector2.new(.5,0)
@@ -146,7 +148,7 @@ function Presentation.nameplate(model, viewerName, avatarName)
  portrait.BorderSizePixel = 0
  portrait.ScaleType = Enum.ScaleType.Crop
  local robloxId = tonumber(model:GetAttribute("RobloxId"))
- portrait.Image = robloxId and "rbxthumb://type=AvatarHeadShot&id=" .. robloxId .. "&w=150&h=150" or ""
+ portrait.Image = robloxId and robloxId>0 and "rbxthumb://type=AvatarHeadShot&id=" .. robloxId .. "&w=150&h=150" or ""
  portrait.Parent = design
  local round = Instance.new("UICorner")
  round.CornerRadius = UDim.new(1, 0)

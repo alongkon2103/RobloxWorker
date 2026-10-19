@@ -78,7 +78,9 @@ SQLite WAL + synchronous FULL เก็บ session, raw inbox, actor bindings, d
 
 ## คนดูเข้าร่วมและ Rocket
 
-เลือก `joinMode` ต่อ session ได้ 3 ค่า: `at` ต้องมี@ (ค่าเริ่มต้น), `plain` พิมพ์ชื่อ Roblox ตรงๆ, `both` รับทั้งสองแบบ บันทึกใน SQLite และคงค่าเมื่อ reset รอบ เปลี่ยนทันทีด้วย POST `/v1/sessions/:id/join-mode` body `{ "joinMode": "both" }` ใช้ session token
+Direct LIVE: แชตหรือส่งของขวัญครั้งแรกจะสร้าง Bacon โดยใช้ TikTok user ID เป็นตัวตน พิมพ์ชื่อ Roblox ที่ถูกต้องภายหลังเพื่อเปลี่ยนอวตารเดิมโดยไม่เสียระยะทาง/บัฟ Follow มีคูลดาวน์ 600 วินาทีต่อคนต่อช่อง ดูเงื่อนไขและลำดับอัปเดตเกมใน [Direct Bacon participation](docs/DIRECT_BACON_PARTICIPATION.md)
+
+เลือก `joinMode` สำหรับรูปแบบชื่อ Roblox ต่อ session ได้ 3 ค่า: `at` ต้องมี@, `plain` พิมพ์ชื่อ Roblox ตรงๆ, `both` รับทั้งสองแบบ (ค่าเริ่มต้น) บันทึกใน SQLite และคงค่าเมื่อ reset รอบ เปลี่ยนทันทีด้วย POST `/v1/sessions/:id/join-mode` body `{ "joinMode": "both" }` ใช้ session token
 
 
 คนดูพิมพ์ `@RobloxUsername` / `@ RobloxUsername` ตามค่าเริ่มต้น API จะ resolve บัญชี Roblox และผูกกับ TikTok user ID ของผู้พิมพ์ ไม่ใช้ชื่อแสดงผลเป็นตัวระบุคน

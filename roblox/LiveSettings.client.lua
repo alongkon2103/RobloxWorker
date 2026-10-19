@@ -1,10 +1,10 @@
 local Players=game:GetService("Players")local RS=game:GetService("ReplicatedStorage")
 local player=Players.LocalPlayer local remote=RS:WaitForChild("LiveSettingsControl")
 local UI=require(RS:WaitForChild("StreamerUI"))local C=UI.colors local page=UI.page("Live")
-local selected=player:GetAttribute("LiveProvider") or "direct"local joinMode=player:GetAttribute("PreferredJoinMode") or "both"local pending=false
+local selected="direct"local joinMode=player:GetAttribute("PreferredJoinMode") or "both"local pending=false
 local provider=UI.card(page,60)provider.Name="ProviderCard" provider.LayoutOrder=1
-local direct=UI.button(provider,"Direct Live",UDim2.fromOffset(0,0),UDim2.new(.5,-6,0,40),"primary")direct.Name="Direct"
-local tikkies=UI.button(provider,"Tikkies",UDim2.new(.5,6,0,0),UDim2.new(.5,-6,0,40))tikkies.Name="Tikkies"
+local direct=UI.button(provider,"Direct Live",UDim2.fromOffset(0,0),UDim2.new(1,0,0,40),"primary")direct.Name="Direct"
+local tikkies=UI.button(provider,"Tikkies",UDim2.new(.5,6,0,0),UDim2.new(.5,-6,0,40))tikkies.Name="Tikkies"tikkies.Visible=false tikkies.Active=false tikkies.Selectable=false
 local help=UI.text(provider,"",UDim2.fromOffset(0,42),UDim2.new(1,0,0,19),11,C.muted)
 local username=UI.card(page,90)username.Name="UsernameCard" username.LayoutOrder=2
 UI.text(username,"TikTok username",UDim2.new(),UDim2.new(1,0,0,22),14,C.text,true)
@@ -17,7 +17,7 @@ local status=UI.text(connection,"Not connected",UDim2.new(),UDim2.new(1,0,0,23),
 local detail=UI.text(connection,"",UDim2.fromOffset(0,26),UDim2.new(1,0,0,42),12,C.muted)
 local connect=UI.button(connection,"Connect LIVE",UDim2.fromOffset(0,74),UDim2.new(1,0,0,48),"primary")connect.Name="Connect"
 local joinCard=UI.card(page,100)joinCard.Name="JoinFormatCard"joinCard.LayoutOrder=3
-UI.text(joinCard,"Viewer join settings",UDim2.new(),UDim2.new(1,0,0,22),13,C.text,true)
+UI.text(joinCard,"Roblox avatar name format",UDim2.new(),UDim2.new(1,0,0,22),13,C.text,true)
 local modes={}
 for i,item in {{key="at",label="With @"},{key="plain",label="Without @"},{key="both",label="Both"}}do local b=UI.button(joinCard,item.label,UDim2.new((i-1)/3,4,0,27),UDim2.new(1/3,-8,0,36))b.Name=item.key modes[item.key]=b end
 local joinHelp=UI.text(joinCard,"",UDim2.fromOffset(4,67),UDim2.new(1,-8,0,30),12,C.text)
@@ -86,14 +86,14 @@ local function refresh()
  for key,b in modes do UI.select(b,key==joinMode)UI.enabled(b,not pending)UI.select(b,key==joinMode)end
  joinHelp.Text=joinMode=="at"and "Viewers type @RobloxUsername in chat."or joinMode=="plain"and "Viewers type RobloxUsername directly in chat."or "Viewers can type @RobloxUsername or RobloxUsername."
  status.Text=(states[phase]or phase)..(enabled and "  ·  "..(activeProvider=="direct"and "Direct Live"or "Tikkies")or "")status.TextColor3=phase=="live"and C.mint or phase=="error"and C.red or C.text
- local errorCode=player:GetAttribute("LiveError")detail.Text=errors[errorCode]or(enabled and (activeProvider=="direct"and "Viewers join with their Roblox username. Gifts, likes and follows power their racer."or "New viewers and gifts will appear in your race automatically.")or (selected=="direct"and "Enter your TikTok name above, then connect."or "Ready to use your Tikkies viewer and gift settings."))
+ local errorCode=player:GetAttribute("LiveError")detail.Text=errors[errorCode]or(enabled and (activeProvider=="direct"and "Chat or send any gift to join as Bacon. A valid Roblox name changes your avatar."or "New viewers and gifts will appear in your race automatically.")or (selected=="direct"and "Enter your TikTok name above, then connect."or "Ready to use your Tikkies viewer and gift settings."))
  local available=selected~="tikkies"or player:GetAttribute("TikkiesAvailable")==true
  if not available then detail.Text=errors[player:GetAttribute("LiveTikkiesError")]or errors.tikkies_unavailable end
  connect.Text=pending and "Please wait…"or same and "Disconnect"or enabled and "Switch connection"or "Connect LIVE"
  connect:SetAttribute("Kind",same and "danger"or "primary")UI.enabled(connect,not pending and available)
 end
 for mode,b in modes do b.Activated:Connect(function()if pending then return end joinMode=mode remote:FireServer("set_join_mode",mode)refresh()end)end
-direct.Activated:Connect(function()if not pending then selected="direct"refresh()requestGifts()end end)tikkies.Activated:Connect(function()if not pending then selected="tikkies"refresh()requestGifts()end end)
+direct.Activated:Connect(function()if not pending then selected="direct"refresh()requestGifts()end end)
 local typed,applying=false,false local revision,lastSent=0,nil
 local function saveName()
  local value=input.Text:match("^%s*(.-)%s*$"):gsub("^@",""):lower()

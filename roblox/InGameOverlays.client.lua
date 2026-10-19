@@ -115,7 +115,7 @@ local function showBoard(b)
  empty.Visible=#b.rows==0 empty.Text='No winners this week'
  for i,row in rowFrames do
   local r=b.rows[i]row.frame.Visible=r~=nil
-  if r then row.name.Text=r.name row.wins.Text=tostring(r.wins)row.image.Image='rbxthumb://type=AvatarHeadShot&id='..r.robloxId..'&w=150&h=150'end
+  if r then row.name.Text=r.name row.wins.Text=tostring(r.wins)row.image.Image=(tonumber(r.robloxId)or 0)>0 and('rbxthumb://type=AvatarHeadShot&id='..r.robloxId..'&w=150&h=150')or ''end
  end
  weekly:SetAttribute('NextResetAt',b.nextResetAt)
 end
@@ -140,9 +140,12 @@ RunService.RenderStepped:Connect(function(dt)
   local offset=Vector2.new(math.sin(count*2.4)*math.min(8,count*.7),math.cos(count*2.4)*math.min(8,count*.7))
   local target=a.point+offset local image=markers[a.id]
   if not image then
-   image=Instance.new('ImageLabel')image.Name='Racer'image.AnchorPoint=Vector2.new(.5,.5)image.Size=UDim2.fromOffset(18,18)image.BackgroundColor3=mint image.Image='rbxthumb://type=AvatarHeadShot&id='..tostring(a.model:GetAttribute('RobloxId'))..'&w=150&h=150'image.Position=UDim2.fromOffset(target.X,target.Y)image.ZIndex=6 image.Parent=markerLayer corner(image,20)
+   image=Instance.new('ImageLabel')image.Name='Racer'image.AnchorPoint=Vector2.new(.5,.5)image.Size=UDim2.fromOffset(18,18)image.BackgroundColor3=mint image.Image=''image.Position=UDim2.fromOffset(target.X,target.Y)image.ZIndex=6 image.Parent=markerLayer corner(image,20)
    local stroke=Instance.new('UIStroke')stroke.Color=Color3.fromRGB(255,249,231)stroke.Thickness=1.5 stroke.Parent=image markers[a.id]=image
   end
+  local id=tonumber(a.model:GetAttribute('RobloxId'))or 0
+  local portrait=id>0 and('rbxthumb://type=AvatarHeadShot&id='..tostring(id)..'&w=150&h=150')or ''
+  if image.Image~=portrait then image.Image=portrait end
   local old=Vector2.new(image.Position.X.Offset,image.Position.Y.Offset)local pos=old:Lerp(target,blend)image.Position=UDim2.fromOffset(pos.X,pos.Y)
  end
  for id,image in markers do if not keep[id]then image:Destroy()markers[id]=nil end end

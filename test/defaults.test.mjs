@@ -62,7 +62,7 @@ test('Direct translator emits all ten published effects with actual quantity',as
   const defaults=new PublishedDefaults(store,cfg,{fetchFn:async()=>new Response(JSON.stringify(pub('all10',mappings)))});await defaults.refresh();
   const session=store.create({ownerRobloxId:'1',jobId:'job',tiktokUsername:'streamer',...defaults.snapshot({giftMap:null})});
   const tr=new EventTranslator(store,{resolve:async()=>({id:'123',name:'Runner'}),giftMap:{}});
-  await tr.handle(session.id,1,compactMessage({type:'WebcastChatMessage',data:{common:{msgId:'join'},user:{userId:'viewer'},comment:'@Runner'}}));let e=store.poll(session.id);store.ack(session.id,e.eventId,e.receipt);
+  await tr.handle(session.id,1,compactMessage({type:'WebcastChatMessage',data:{common:{msgId:'join'},user:{userId:'viewer'},comment:'hello everyone!'}}));let e=store.poll(session.id);store.ack(session.id,e.eventId,e.receipt);
   for(const [i,key]of GAME_EFFECT_KEYS.entries()){
    await tr.handle(session.id,1,compactMessage({type:'WebcastGiftMessage',data:{common:{msgId:'gift-'+i,roomId:'room'},user:{userId:'viewer'},giftId:String(i+1),giftDetails:{giftType:0},repeatCount:3}}));
    e=store.poll(session.id);assert.deepEqual(e.effects,[{key,value:1,count:3}]);assert.equal(e.ownerRobloxId,'1');store.ack(session.id,e.eventId,e.receipt);

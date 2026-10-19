@@ -47,7 +47,7 @@ export class LiveManager {
     if(typeof e.data!=='string'||Buffer.byteLength(e.data)>1048576)throw new Error('bad_frame');
     c.lastData=this.store.now();const payload=JSON.parse(e.data),messages=payload.messages??[payload];
     if(!Array.isArray(messages)||messages.length>500)throw new Error('bad_bundle');
-    const incoming=[],catalogue=[];const giftMap=this.store.effectiveGiftMap(s.id,this.config.giftMap);
+    const incoming=[],catalogue=[];
     for(const message of messages){
      const state=message.data?.state;
      if(message.type==='tiktok.connect'||(message.type==='room.status'&&state==='connected')||message.type?.startsWith('Webcast')){
@@ -58,7 +58,7 @@ export class LiveManager {
      }
      const m=compactMessage(message);
      if(m?.type==='WebcastGiftMessage')catalogue.push(m);
-     if(m&&(m.type!=='WebcastGiftMessage'||giftMap[m.data.giftId]))incoming.push(m);
+     if(m)incoming.push(m);
     }
     if(catalogue.length)this.store.catalogue(s.id,catalogue);
     if(incoming.length){const current=this.store.get(s.id);this.store.ingest(s.id,current.generation,incoming);}
@@ -94,7 +94,9 @@ export class LiveManager {
   const started=performance.now(),waiting=new Set();
   for(let i=0;i<25&&!this.stopped;i++){
    const row=this.store.inbox(id,[...this.lookupActors(id),...waiting]);if(!row)return;
-   if(joinUsername(row,this.store.get(id).join_mode)){
+   try{this.translator.prepareDirectActor?.(id,row.generation,row,{signal:this.abort.signal});}catch(error){if(error.code==='queue_full')return;throw error;}
+   const s=this.store.get(id),actor=this.store.actor(id,row.generation,`tiktok:${row.data?.user?.userId}`);
+   if(joinUsername(row,s.join_mode)&&(s.provider!=='direct'||actor?.avatarType==='bacon')){
     waiting.add(row.actor_key);
     // Match the resolver's four network slots without blocking other actors.
     if(this.lookups.size<4){

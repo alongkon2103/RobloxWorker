@@ -101,7 +101,7 @@ function Publisher.start(config,transport)
      local speed=math.clamp(m:GetAttribute("RouteSpeed") or 0,0,1500)
      local effects={} local now=workspace:GetServerTimeNow()
      for name,c in Events do local untilAt=m:GetAttribute(c.Attribute.."Until") or 0 if untilAt>now then table.insert(effects,{key=name,remaining=untilAt-now,tier=c.Tier or 0})end end
-     table.insert(racers,{id=actor,robloxId=tostring(m:GetAttribute("RobloxId")),name=tostring(m:GetAttribute("ViewerDisplayName") or "Viewer"),distance=m:GetAttribute("RouteDistance") or -14,speed=speed,topSpeed=speed,rank=m:GetAttribute("RaceRank") or 0,state=m:GetAttribute("RaceState") or "Lobby",effects=effects,tiktokAvatarUrl=m:GetAttribute("ViewerTikTokAvatarUrl")})
+     table.insert(racers,{id=actor,robloxId=tostring(m:GetAttribute("RobloxId")),avatarType=m:GetAttribute("AvatarType"),name=tostring(m:GetAttribute("ViewerDisplayName") or "Viewer"),distance=m:GetAttribute("RouteDistance") or -14,speed=speed,topSpeed=speed,rank=m:GetAttribute("RaceRank") or 0,state=m:GetAttribute("RaceState") or "Lobby",effects=effects,tiktokAvatarUrl=m:GetAttribute("ViewerTikTokAvatarUrl")})
     end
    end
   end end

@@ -4,7 +4,7 @@ export class AvatarCache{
  get(id){return this.cache.get(id)?.url??null;}
  enqueue(ids){
   if(this.closed)return;
-  for(const id of ids){const item=this.cache.get(id);if(!item||item.until<=this.now())this.pending.add(id);}
+  for(const id of ids){if(typeof id!=='string'||!/^[1-9]\d{0,15}$/.test(id)||BigInt(id)>9007199254740991n)continue;const item=this.cache.get(id);if(!item||item.until<=this.now())this.pending.add(id);}
   if(!this.timer&&!this.running&&this.pending.size){this.timer=setTimeout(()=>{this.timer=null;void this.flush();},100);this.timer.unref();}
  }
  async flush(){

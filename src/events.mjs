@@ -37,14 +37,35 @@ export function joinUsername(message,mode){
 }
 export class EventTranslator {
  constructor(store,{resolve,giftMap,maxActors=100,signalInterval=5000}){Object.assign(this,{store,resolve,giftMap,maxActors:Math.min(100,maxActors),signalInterval});}
+ prepareDirectActor(id,generation,message,{signal}={}){
+  const s=this.store.get(id),d=message.data,actorKey=`tiktok:${d.user.userId}`;
+  let actor=this.store.actor(id,generation,actorKey);
+  if(signal?.aborted||s.provider!=='direct'||s.generation!==generation||['closed','expired'].includes(s.status)||actor||!['WebcastChatMessage','WebcastGiftMessage'].includes(message.type))return {actor,created:false};
+  if(this.store.actorCount(id,generation)>=this.maxActors)return {actor:null,created:false};
+  actor={actorKey,avatarType:'bacon',robloxId:'0',robloxUsername:'',tiktokUsername:d.user.displayId,tiktokDisplayName:d.user.nickname||d.user.displayId};
+  const eventId='bacon:'+message.sourceId,created=this.store.enqueue(id,generation,eventId,{...actor,eventType:'join',effects:[]},{actor,sourceId:eventId});
+  return {actor:this.store.actor(id,generation,actorKey),created};
+ }
  async handle(id,generation,message,{signal}={}){
   const {type,data:d,sourceId}=message;const s=this.store.get(id);
   if(signal?.aborted||s.generation!==generation||['closed','expired'].includes(s.status))return false;
   const actorKey=`tiktok:${d.user.userId}`;
-  let actor=this.store.actor(id,generation,actorKey);
+  let {actor,created}=s.provider==='direct'?this.prepareDirectActor(id,generation,message,{signal}):{actor:this.store.actor(id,generation,actorKey),created:false};
   if(type==='WebcastChatMessage'){
    const command=joinUsername(message,s.join_mode);
    if(command){
+    if(s.provider==='direct'){
+     if(actor?.avatarType!=='bacon'||this.store.seen(id,generation,sourceId))return created;
+     const claim=this.store.beginAvatarLookup(id,generation,actorKey,sourceId);if(!claim)return created;
+     let found=claim.result;
+     if(!found){try{found=await this.resolve(command);}catch{return created;}}
+     if(signal?.aborted)return false;
+     if(!found||!Number.isSafeInteger(Number(found.id))||Number(found.id)<1||typeof found.name!=='string'||!/^[A-Za-z0-9_]{3,20}$/.test(found.name))return created;
+     this.store.saveAvatarLookup(id,generation,actorKey,sourceId,found);
+     const previousActor=this.store.actor(id,generation,actorKey);if(previousActor?.avatarType!=='bacon')return created;
+     const upgraded={actorKey,avatarType:'roblox',robloxId:String(found.id),robloxUsername:found.name,tiktokUsername:d.user.displayId,tiktokDisplayName:d.user.nickname||d.user.displayId};
+     return this.store.enqueue(id,generation,sourceId,{...upgraded,eventType:'join',effects:[],avatarUpdate:true,previousActor,joinEventId:previousActor.joinEventId},{actor:upgraded,sourceId});
+    }
     if(this.store.seen(id,generation,sourceId))return false;
     if(!actor&&this.store.actorCount(id,generation)>=this.maxActors)return false;
     const found=await this.resolve(command);if(!found||signal?.aborted)return false;
@@ -52,11 +73,11 @@ export class EventTranslator {
     return this.store.enqueue(id,generation,sourceId,{...actor,eventType:'join',effects:[]},{actor,sourceId});
    }
   }
-  if(!actor)return false;
+  if(!actor)return created;
   if(type==='WebcastGiftMessage'){
-   const effect=this.store.effectiveGiftMap(id,this.giftMap)[d.giftId];if(!effect)return false;
+   const effect=this.store.effectiveGiftMap(id,this.giftMap)[d.giftId];if(!effect)return created;
    if(!Number.isSafeInteger(d.repeatCount)||d.repeatCount<1||d.repeatCount>10000)throw new Fault('invalid_gift_count');
-   if(!Number.isSafeInteger(d.giftType)||d.giftType<0||d.giftType===1&&!d.repeatEnd)return false;
+   if(!Number.isSafeInteger(d.giftType)||d.giftType<0||d.giftType===1&&!d.repeatEnd)return created;
    const key=d.giftType===1&&d.groupId&&d.groupId!=='0'?`combo:${actorKey}:${d.giftId}:${d.groupId}`:sourceId;
    const giftIdentity=createHash('sha256').update(JSON.stringify([d.roomId??'',key])).digest('hex');
    const eventId=`gift:${giftIdentity}`;
@@ -68,7 +89,7 @@ export class EventTranslator {
    const identity=createHash('sha256').update(JSON.stringify([d.roomId??'',actorKey,sourceId])).digest('hex');
    return this.store.socialEvent(id,generation,actor,sourceId,identity,type==='WebcastLikeMessage'?'like':'follow',d.likeCount);
   }
-  if(s.provider==='direct')return false;
+  if(s.provider==='direct')return created;
   const bucket=Math.floor(this.store.now()/this.signalInterval);
   const key=`signal:${actorKey}:${bucket}`;
   return this.store.enqueue(id,generation,key,{...actor,eventType:type==='WebcastLikeMessage'?'like':type==='WebcastSocialMessage'?'social':'chat',effects:[]},{sourceId:key});

@@ -8,7 +8,7 @@ test('per-session at/plain/both join modes survive reset and do not leak',async(
    assert.equal(s.joinMode,mode);
    for(const [i,text] of ['@Runner_Name','Runner_Name'].entries()){
     const m=compactMessage({type:'WebcastChatMessage',data:{msgId:mode+i,user:{userId:String(i+1),uniqueId:'viewer'},comment:text}});
-    assert.equal(await translate.handle(s.id,1,m),accepted[i],mode+': '+text);
+    await translate.handle(s.id,1,m);assert.equal(store.actor(s.id,1,'tiktok:'+String(i+1)).avatarType,accepted[i]?'roblox':'bacon',mode+': '+text);
    }
    store.reset(s.id,'reset-mode');assert.equal(store.public(store.get(s.id)).joinMode,mode);
    store.setJoinMode(s.id,'both');assert.equal(store.get(s.id).join_mode,'both');
@@ -39,9 +39,9 @@ test('new sessions default to both and changing join mode keeps the same live se
   assert.equal(await translate.handle(s.id,1,chat('one','Runner_Name')),true);
   store.status(s.id,'live');store.setJoinMode(s.id,'at');
   assert.equal(store.get(s.id).run_id,s.runId);assert.equal(store.get(s.id).status,'live');
-  assert.equal(await translate.handle(s.id,1,chat('two','Runner_Name')),false);
+  await translate.handle(s.id,1,chat('two','Runner_Name'));assert.equal(store.actor(s.id,1,'tiktok:two').avatarType,'bacon');
   assert.equal(await translate.handle(s.id,1,chat('three','@Runner_Name')),true);
   store.setJoinMode(s.id,'plain');assert.equal(await translate.handle(s.id,1,chat('four','Runner_Name')),true);
-  assert.equal(await translate.handle(s.id,1,chat('five','@Runner_Name')),false);
+  await translate.handle(s.id,1,chat('five','@Runner_Name'));assert.equal(store.actor(s.id,1,'tiktok:five').avatarType,'bacon');
  }finally{store.close();}
 });

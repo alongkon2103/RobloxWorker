@@ -6,13 +6,14 @@ const gift=(id,end,count=1)=>({type:'WebcastGiftMessage',data:{common:{msgId:id}
 test('join then mapped final combo only once and round cancels pending lookup',async()=>{
  const s=new Store(':memory:');const session=make(s);const translator=new EventTranslator(s,{resolve:async n=>({id:'321',name:n}),giftMap:{99:{key:'rocket',value:1}},maxActors:30});
  await translator.handle(session.id,session.generation,compactMessage(chat('1','@ Cute_Runner')));
+ const bacon=s.poll(session.id);assert.equal(bacon.avatarType,'bacon');s.ack(session.id,bacon.eventId,bacon.receipt);
  const join=s.poll(session.id);assert.equal(join.eventType,'join');assert.equal(join.robloxId,'321');assert.equal(join.actorKey,'tiktok:90071992547409999');s.ack(session.id,join.eventId,join.receipt);
  await translator.handle(session.id,1,compactMessage(gift('2',false,2)));assert.equal(s.poll(session.id),null);
  await translator.handle(session.id,1,compactMessage(gift('3',true,3)));const g=s.poll(session.id);assert.equal(g.effects[0].count,3);s.ack(session.id,g.eventId,g.receipt);
  await translator.handle(session.id,1,compactMessage(gift('4',true,3)));assert.equal(s.poll(session.id),null);
  let release;const delayed=new EventTranslator(s,{resolve:()=>new Promise(r=>release=r),giftMap:{},maxActors:30});
- const pending=delayed.handle(session.id,1,compactMessage(chat('5','@Other_User')));s.reset(session.id);release({id:'555',name:'Other_User'});await pending;
- assert.equal(s.poll(session.id),null);assert.equal(s.actor(session.id,2,'tiktok:90071992547409999'),null);s.close();
+ s.reset(session.id);const pending=delayed.handle(session.id,2,compactMessage(chat('5','@Other_User')));s.reset(session.id);release({id:'555',name:'Other_User'});await pending;
+ assert.equal(s.poll(session.id),null);assert.equal(s.actor(session.id,3,'tiktok:90071992547409999'),null);s.close();
 });
 test('durable inbox persists retry at queue capacity',()=>{
  const s=new Store(':memory:',{maxQueue:1});const a=make(s);
@@ -32,7 +33,7 @@ test('gift combo receipts survive round reset, session replacement and SQLite re
  const dir=mkdtempSync(join(tmpdir(),'gift-receipts-'));let s;
  try{
   s=new Store(join(dir,'db.sqlite'));let session=make(s);let tr=new EventTranslator(s,{resolve:async()=>({id:'321',name:'Runner'}),giftMap:{99:{key:'gojo',value:1}}});
-  const joinActor=async()=>{await tr.handle(session.id,s.get(session.id).generation,compactMessage(chat('join','@Runner')));const e=s.poll(session.id);s.ack(session.id,e.eventId,e.receipt);};
+  const joinActor=async()=>{await tr.handle(session.id,s.get(session.id).generation,compactMessage(chat('join','hello everyone!')));const e=s.poll(session.id);s.ack(session.id,e.eventId,e.receipt);};
   await joinActor();await tr.handle(session.id,1,compactMessage(gift('first',true,3)));let e=s.poll(session.id);s.ack(session.id,e.eventId,e.receipt);
   s.reset(session.id);await joinActor();await tr.handle(session.id,2,compactMessage(gift('retry',true,3)));assert.equal(s.poll(session.id),null,'Combo replayed after round reset');
   s.stop(session.id);s.close();s=new Store(join(dir,'db.sqlite'));session=make(s);tr=new EventTranslator(s,{resolve:async()=>({id:'321',name:'Runner'}),giftMap:{99:{key:'gojo',value:1}}});await joinActor();
