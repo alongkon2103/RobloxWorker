@@ -87,9 +87,11 @@ local function updateCatalog()
    if e.Kind=="Debuff" then detail="Random racer · -10% speed · "..e.Duration.."s"
    elseif e.Kind=="Defense" then detail="Protection · "..e.Duration.."s"
    elseif e.Kind=="Attack" then detail="Purple · knockdown "..e.StunDuration.."s"
+   elseif e.StackMode=="TimedFlatSpeed" then detail="+"..e.SpeedBonus.." speed · "..e.Duration.."s"
    elseif e.StackMode=="TimedMultiplier" then detail="×"..(e.SpeedMultiplier or 1).." · "..(e.Duration or 0).."s · max "..(e.MaxSpeed or "—")
    elseif e.StackMode=="RoundMultiplier" then detail="×"..(e.SpeedMultiplier or 1).." per gift · this round"
    else detail="×"..(e.SpeedMultiplier or 1).." speed · "..(e.Duration or 0).."s" end
+   if e.RoundSpeedPerGift then detail..=" · +"..e.RoundSpeedPerGift.." this round / gift"end
    b.Text=(key=="octopus"and "-"or tostring(slot)).."   "..(labels[key]or key:gsub("_"," ")).."\n"..detail
   else b.Text="" end
   b.Visible=key~=nil

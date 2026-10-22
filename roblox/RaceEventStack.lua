@@ -6,12 +6,16 @@ function Stack.evaluate(model,now,events,baseSpeed,maxSpeed)
  baseSpeed=baseSpeed or 20
  local active={} local total=0 local roundMultiplier=1
  local timedMultiplier,timedCap=1,math.huge
+ local timedBonus=0
+ local roundBonus=math.max(0,model:GetAttribute("RoundSpeedBonus")or 0)
  for key,boost in events or config do
   if boost.Kind=="Attack" or boost.Kind=="Defense" or boost.Kind=="Debuff" then
    -- Attack and defense actions do not replace speed forms.
   elseif boost.StackMode=="RoundMultiplier" then
    local stacks=math.clamp(model:GetAttribute(boost.Attribute.."Stacks") or 0,0,boost.MaxStacks or 32)
    roundMultiplier*=boost.SpeedMultiplier^stacks
+  elseif boost.StackMode=="TimedFlatSpeed" then
+   if (model:GetAttribute(boost.Attribute.."Until")or 0)>now then timedBonus+=boost.SpeedBonus or 0 end
   elseif boost.StackMode=="TimedMultiplier" then
    if (model:GetAttribute(boost.Attribute.."Until")or 0)>now then
     local stacks=math.clamp(model:GetAttribute(boost.Attribute.."Stacks")or 1,0,boost.MaxStacks or 32)
@@ -62,7 +66,7 @@ function Stack.evaluate(model,now,events,baseSpeed,maxSpeed)
   total+=multiplier*weight
   strongestWeight=math.max(strongestWeight,weight)
  end
- return primary,(total+1-strongestWeight)*roundMultiplier*slow*passiveMultiplier,active
+ return primary,((total+1-strongestWeight)*roundMultiplier*passiveMultiplier+(roundBonus+timedBonus)/baseSpeed)*slow,active
 end
 function Stack.isPrimary(model,key,now)
  return Stack.evaluate(model,now)==key

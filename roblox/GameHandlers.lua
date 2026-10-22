@@ -258,6 +258,10 @@ function Handlers.event(context)
 		local value = amount(effect)
   if effect.key~="speed_boost" then cameraEvent=true end
 		local boost=Events[effect.key]
+  if boost and boost.RoundSpeedPerGift then
+   local previous=entry.model:GetAttribute("RoundSpeedBonus")or 0
+   entry.model:SetAttribute("RoundSpeedBonus",math.min(Config.MaxRunSpeed or 1500,previous+boost.RoundSpeedPerGift*effect.count))
+  end
 		if effect.key=="asta"then astaGift=true end
 		if boost and type(boost.SpeedMultiplier)=="number" and boost.SpeedMultiplier>1
 			and boost.Kind~="Attack" and boost.Kind~="Defense" then speedGift=true end
@@ -280,7 +284,7 @@ function Handlers.event(context)
 			local paused=arena.race.phase=="Lobby" or arena.race.phase=="Countdown"
 			local previousUntil=paused and (eventNow+(entry.model:GetAttribute(boost.Attribute.."PendingSeconds") or 0))
 				or (entry.model:GetAttribute(boost.Attribute.."Until") or 0)
-			if boost.StackMode=="TimedAdditiveSpeed" or boost.StackMode=="TimedMultiplier" then
+			if boost.StackMode=="TimedAdditiveSpeed" or boost.StackMode=="TimedMultiplier" or boost.StackMode=="TimedFlatSpeed" then
 				local stacks=previousUntil>eventNow and (entry.model:GetAttribute(boost.Attribute.."Stacks") or 1) or 0
 				local nextStacks=stacks+effect.count
 				if boost.StackMode=="TimedMultiplier"then nextStacks=math.min(boost.MaxStacks or 32,nextStacks)end
